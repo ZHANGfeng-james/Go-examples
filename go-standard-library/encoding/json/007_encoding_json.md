@@ -1,0 +1,1 @@
+json 包中实现的是 JSON 内容的编码和解码（RFC 7159）。JSON 值和 Go 值之间的映射，用 Marsha 和 Unmarshal 函数实现。
