@@ -6,3 +6,4 @@
 * [gobyexample-cn](https://github.com/gobyexample-cn/gobyexample)：用 examples 的方式掌握 Go 语言
 
 不论是 TDD，还是 examples 的方式，都是为了熟练掌握 Go 语言。
+
