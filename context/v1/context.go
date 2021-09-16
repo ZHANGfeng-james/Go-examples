@@ -109,3 +109,68 @@ func slowOperationWithTimeout(ctx context.Context) error {
 		return nil
 	}
 }
+
+func doneUsage() {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(2*time.Second))
+	defer cancel()
+
+	channel := make(chan int)
+	go stream(ctx, channel)
+
+	for ele := range channel {
+		fmt.Println(ele)
+	}
+}
+
+func stream(ctx context.Context, out chan<- int) error {
+	for {
+		time.Sleep(500 * time.Millisecond)
+		v, err := doSomething(ctx)
+		if err != nil {
+			return err // reason 2:
+		}
+		select {
+		case out <- v:
+			// nornal case
+		case <-ctx.Done():
+			close(out)
+			return ctx.Err() // reason 1:
+		}
+	}
+}
+
+func doSomething(ctx context.Context) (int, error) {
+	return 1, nil
+}
+
+func withValueUsage() {
+	type favContextKey string
+	f := func(ctx context.Context, k favContextKey) {
+		if v := ctx.Value(k); v != nil {
+			fmt.Println("found value:", v)
+			return
+		}
+		fmt.Println("key not found:", k)
+	}
+
+	k := favContextKey("language")
+	ctx := context.WithValue(context.Background(), k, "Go")
+
+	f(ctx, k)
+	f(ctx, favContextKey("color"))
+}
+
+func withValueUseNormalType() {
+	f := func(ctx context.Context, k string) {
+		if v := ctx.Value(k); v != nil {
+			fmt.Println("found value:", v)
+			return
+		}
+		fmt.Println("key not found:", k)
+	}
+
+	k := "language"
+	ctx := context.WithValue(context.Background(), k, "Go")
+	f(ctx, k)
+	f(ctx, "color")
+}

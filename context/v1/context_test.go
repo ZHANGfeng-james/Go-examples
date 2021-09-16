@@ -5,5 +5,5 @@ import (
 )
 
 func TestContext(t *testing.T) {
-	withTimeout()
+	withValueUseNormalType()
 }

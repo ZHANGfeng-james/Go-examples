@@ -283,3 +283,147 @@ func (c *cancelCtx) cancel(removeFromParent bool, err error) {
 
 ### type Context
 
+一个 Context 类型的值装载了一个**截止时间**、**取消信号量**以及一些在 API 边界中传输的**值**。
+
+Context 相关的方法**支持并发调用**。
+
+~~~go
+type Context interface {
+    Deadline() (deadline time.Time, ok bool)
+    
+    Done() <-chan struct{}
+    
+    Err() error
+    
+    Value(key interface{}) interface{}
+}
+~~~
+
+Context 是一个接口类型，下面来看看接口具备的功能及特点：
+
+* Deadline()：方法返回 Context 类型的值表示的工作（完成时）可以**被取消的时间**，如果 Context 没有设置 deadline，返回的 ok 值是 false。连续调用 Deadline 获得**相同的结果**。
+* Done()：调用 Done() 会返回**一个 channel 实例**，这个实例是指：Context 所表示的工作可以被取消时，channel 会**被关闭**。如果 Context 表示的工作不允许被取消，其返回值将是 nil；连续的调用 Done 获得**相同的结果**。关闭 channel 的操作可能会在 cancelFunc 返回后，**异步**发生。WithCancel 的**使用场景**是：cancelFunc 被调用时，Done() 表示的 channel 被关闭；WithDeadline 的**使用场景**是：deadline 已到达（到期），Done() 表示的 channel 被关闭；WithTimeout 的**使用场景**：超时时间已耗尽，Done() 表示的 channel 被关闭。Done() 被设计**用在 select 语句中**，比如下述的示例代码。
+
+~~~go
+func doneUsage() {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(2*time.Second))
+	defer cancel()
+
+	channel := make(chan int)
+	go stream(ctx, channel)
+
+	for ele := range channel {
+		fmt.Println(ele)
+	}
+}
+
+func stream(ctx context.Context, out chan<- int) error {
+	for {
+		time.Sleep(500 * time.Millisecond)
+		v, err := doSomething(ctx)
+		if err != nil {
+			return err // reason 2:
+		}
+		select {
+		case out <- v:
+			// nornal case
+		case <-ctx.Done():
+			close(out)
+            return ctx.Err() // reason 1: WithDeadline 截止时间是运行 2*time.Second，并关闭 Done() 的 channel
+		}
+	}
+}
+
+func doSomething(ctx context.Context) (int, error) {
+	return 1, nil
+}
+~~~
+
+* Err()：如果 Done 还没有关闭，Err 返回 nil 值；如果 Done 已经关闭，Err 会返回一个 non-nil 值用于解释原因：Context 被取消了，或者是 deadline 到期。
+* Value(key interface{}) interface{}：Value 方法返回在 Context 类型值中和 key 相关联的 value 值，如果在其中不存在和 key 相关联的值，返回 nil。仅仅当要在传输进程和 API 边界中使用 request-scoped 数据时，才是 WithValue 的使用场景，而不是为了传输可选的参数到函数中。Package 中定义 Context 使用的 key，需要确保**访问的类型安全（包级别的，未导出类型，避免冲突）**，比如下述的示例代码。Context 中的 Key 可以是任何类型，但必须是支持可比较（== 相等判断）
+
+~~~go
+package user // Package user defines a User type that's stored in Contexts.
+
+import "context"
+
+// User is the type of value stored in the Contexts.
+type User struct {
+	Name string
+	Age  int
+}
+
+// key is an unexported type for keys defined in this package.
+// This prevents collisions with keys defined in other packages.
+type key int
+
+// userKey is the key for user.User values in Contexts. It is
+// unexported; clients use user.NewContext and user.FromContext
+// instead of using this key directly.
+var userKey key
+
+// NewContext returns a new Context that carries value u.
+func NewContext(ctx context.Context, u *User) context.Context {
+	return context.WithValue(ctx, userKey, u)
+}
+
+// FromContext returns the User value stored in ctx, if any.
+func FromContext(ctx context.Context) (*User, bool) {
+	u, ok := ctx.Value(userKey).(*User)
+	return u, ok
+}
+~~~
+
+### func Background
+
+~~~go
+func Background() Context
+~~~
+
+Background 返回一个非 nil 的、空的 Context 值。该值不会被取消、没有任何 key-value 内容，也没有 deadline。一般情况下，使用在 main 函数中，为接收到的 Request 创建顶级的 Context 实例。
+
+### func TODO
+
+~~~go
+func TODO() Context
+~~~
+
+TODO 返回一个非 nil 的、空的 Context 类型的实例。一般使用使用 TODO 的场景是这样的：代码还未确定使用什么 Context 类型的实例，或者是周围的函数还不确定是否需要使用 Context 类型的实例。
+
+### func WithValue
+
+~~~go
+func WithValue(parent Context, key, val interface{}) Context
+
+// A valueCtx carries a key-value pair. It implements Value for that key and
+// delegates all other calls to the embedded Context.
+type valueCtx struct {
+	Context
+	key, val interface{}
+}
+~~~
+
+WithValue 返回一个 parent 的拷贝，同时携带了 key-val 的值。WithValue 的**使用场景**并不是为了传递一些可选的数据到函数中，而是**应用于 request-scoped 数据**。
+
+为了避免在 package 之间使用 Context 可能产生的**冲突**，key 的类型必须是**可比较的**，而且不能是 string 等其他任何内置的基本类型。使用者一般会**自定义 key 的类型**。
+
+~~~go
+func withValueUsage() {
+	type favContextKey string // 自定义的类型，虽然底层仍然是 string，但却不同
+	f := func(ctx context.Context, k favContextKey) {
+		if v := ctx.Value(k); v != nil {
+			fmt.Println("found value:", v)
+			return
+		}
+		fmt.Println("key not found:", k)
+	}
+
+	k := favContextKey("language")
+	ctx := context.WithValue(context.Background(), k, "Go")
+
+	f(ctx, k)
+	f(ctx, favContextKey("color"))
+}
+~~~
+
+如果直接使用 string 类型，IDE 会提示：`should not use built-in type string as key for value; define your own type to avoid collisions (SA1029)`
