@@ -10,10 +10,6 @@ Web 框架引发的**疑惑**：
 
 
 
-
-
-
-
 ### Web 框架雏形
 
 先来一波**烧脑的思考题**：
@@ -277,10 +273,11 @@ C:\Users\Administrator>curl http://localhost:9999/world
 
 1. HTTP 的 Response 如何构建，是如何反馈给 Client 端的？
 2. Response 的类型有哪些？JSON、HTML 等。作为一个 Web 框架，是否可以使用提取公共的代码组成方法，方便用户使用？
+3. HTTP Request 中的参数是如何被解析的？
 
 
 
-在初版的框架代码中，Engine 结构体定义中包含了**路由表**的实例，要知道路由表在整个 Web 框架中是很关键的一个实例，是否可以抽取出来形成独立的文件？这样也符号“单一职责原则”（在类型设计时）。接下来我们从 Engine 的源代码入手，抽取出 router.go 文件：
+在初版的框架代码中，Engine 结构体定义中包含了**路由表**的实例，要知道路由表在整个 Web 框架中是很关键的一个实例，是否可以抽取出来形成独立的文件？这样也符合**“单一职责原则”（在类型设计时）**。接下来我们从 Engine 的源代码入手，抽取出 router.go 文件：
 
 ~~~go
 package gee
@@ -356,7 +353,7 @@ func (engine *Engine) addRoute(method, pattern string, handler HandleFunc) {
 type HandleFunc func(w http.ResponseWriter, req *http.Request)
 ~~~
 
-重构后，获得了一个单独的 router.go 文件，专门用于处理路由表相关的逻辑，符合“单一职责原则”。而且后续还可以在 router.go 中做更加重要的路由匹配策略（**动态路由**），让路由表的性能更加高效（**功能**、**性能**、**智能**）。
+重构后，获得了一个单独的 router.go 文件，专门用于处理路由表相关的逻辑，符合**“单一职责原则”**。而且后续还可以在 router.go 中做更加重要的路由匹配策略（**动态路由**），让路由表的性能更加高效（**功能**、**性能**、**智能**）。
 
 接下来，将目光聚焦到 Response 上：Server 接收到 *http.Request，经过一系列的处理，最终总是需要反馈给 Client 消息的，也就是构造响应 http.ResponseWriter。而上述这两个标准库封装的功能粒度太细，用户在使用时难免会感受到繁琐，比如：
 
@@ -406,9 +403,9 @@ func Error(w ResponseWriter, error string, code int) {
 }
 ~~~
 
-请求的构造是：请求行、请求头和请求体。对应响应也是这样的结构：响应行、响应头和响应体。构造一个完整的响应，需要考虑：StatusCode、Header 和 Body 部分，基本上每一次构造都需要考虑这些因素。如果不进行封装，那么框架的用户将需要写大量的冗余代码。
+请求的构造是：**请求行、请求头和请求体**。对应响应也是这样的结构：响应行、响应头和响应体。构造一个完整的响应，需要考虑：StatusCode、Header 和 Body 部分，基本上每一次构造都需要考虑这些因素。如果不进行封装，那么框架的用户将需要写大量的冗余代码。
 
-封装构造 http.ResponseWriter 的响应内容时，功能封装到哪里呢？是 Enginer 中？还是其他什么地方？此处，引入一个新的实体 Context（此 Context 和 context.Context 没有关系），将**每次请求**的 *http.Request 和 http.ResponseWriter 封装到 Context 类型实体中：
+封装构造 http.ResponseWriter 的响应内容时，**功能封装到哪里呢？**是 Enginer 中？还是其他什么地方？此处，引入一个新的实体 Context（此 Context 和 context.Context 没有关系），将**每次请求**的 *http.Request 和 http.ResponseWriter 封装到 Context 类型实体中：
 
 ~~~go
 package gee
@@ -467,7 +464,7 @@ func (ctx *Context) SetStatus(statusCode int) {
 
 我们构建起来了 Context 结构体类型，并在其上创建了对应的方法：封装了以 JSON、XML、String、Data 格式输出的 http.ResponseWriter 方法，方便用户直接调用。
 
-每一次 HTTP 的 Request 都会创建一个 Context 类型实例，而且符合 HTTP **和状态无关**的特征。因此，还需要重构 gee.go 和 router.go 文件：
+**每一次** HTTP 的 Request 都会**创建一个 Context 类型实例**，而且符合 HTTP **和状态无关**的特征。因此，还需要重构 gee.go 和 router.go 文件：
 
 ~~~go
 package gee
@@ -543,5 +540,254 @@ func (router *router) handle(ctx *Context) { // 重构
 }
 ~~~
 
+接下来，把目光聚焦到 HTTP Request 上，让 Context 具备有解析 URL 中参数的能力：
 
+~~~go
+func (ctx *Context) postForm(key string) string {
+	return ctx.Request.FormValue(key)
+}
+
+func (ctx *Context) Query(key string) string {
+	return ctx.Request.URL.Query().Get(key) // Query是从URL中查询
+}
+~~~
+
+另外还在 context.go 中新增一个**自定义类型**：
+
+~~~go
+type H map[string]interface{}
+~~~
+
+现在来看，整个代码已经很**清晰**了，模块的组成部分**各司其职**。
+
+下面看看封装后，**框架的应用**情况：
+
+~~~go
+package main
+
+import (
+	"goweb/gee"
+	"net/http"
+)
+
+func main() {
+	engine := gee.New()
+
+	engine.GET("/", func(ctx *gee.Context) {
+		ctx.HTML(http.StatusOK, "<h1>Hello Gee<h1>")
+	})
+
+	engine.GET("/json", func(ctx *gee.Context) {
+		obj := gee.H{
+			"name":     "geektutu",
+			"password": 1234,
+		}
+		ctx.JSON(http.StatusOK, obj)
+	})
+
+	engine.POST("/postform", func(ctx *gee.Context) { // 必须是 POST 请求，才能解析出 PostForm 内容
+		ctx.JSON(http.StatusOK, gee.H{
+			"name":     ctx.PostForm("name"),
+			"password": ctx.PostForm("password"),
+		})
+		// example: curl "http://localhost:9999/postform" -X POST -d 'password=1&name=1'
+	})
+
+	engine.GET("/query", func(ctx *gee.Context) {
+		username := ctx.Query("username")
+		ctx.String(http.StatusOK, "Hello, %s!", username)
+		// example: curl "http://localhost:9999/query?username=Michoi"
+	})
+
+	engine.Run(":9999")
+}
+~~~
+
+特别注意，Windows 平台上使用 cmd 做 curl 网络请求：
+
+~~~shell
+curl "http://localhost:9999/postform" -X POST -d 'password=1&name=1'
+~~~
+
+**执行异常**，无法得到正确的请求结果！但是在 git 终端却**工作正常**。
+
+### 路由表 Router
+
+下来一波烧脑的疑惑：
+
+1. 标准库 net/http 中路由表是如何创建的，如何匹配路由获得对应的 HandlerFunc？
+2. 路由表是否可自定义，以此获得**更高的路由查找效率**？
+3. 如何去实现**动态路由**？比如去实现既能匹配 `/hello/a` 也能匹配 `/hello/b` 的路由。
+
+
+
+先来解答一个疑惑：为什么注册了 `/` 的 GET HandlerFunc，但是如果请求的是 `/anything` 时，对应执行了 `/` 的 HandleFunc？
+
+这个疑惑涉及到 net/http 中**路由表的创建**，以及对应**路由匹配的逻辑**，也就是分为上面 2 个部分。解答如下：
+
+~~~go
+type ServeMux struct {
+	mu    sync.RWMutex
+	m     map[string]muxEntry
+	es    []muxEntry // slice of entries sorted from longest to shortest.
+	hosts bool       // whether any patterns contain hostnames
+}
+
+type muxEntry struct {
+	h       Handler
+	pattern string
+}
+
+// Handle registers the handler for the given pattern.
+// If a handler already exists for pattern, Handle panics.
+func (mux *ServeMux) Handle(pattern string, handler Handler) { // 路由表的创建
+	mux.mu.Lock()
+	defer mux.mu.Unlock()
+
+	if pattern == "" {
+		panic("http: invalid pattern")
+	}
+	if handler == nil {
+		panic("http: nil handler")
+	}
+	if _, exist := mux.m[pattern]; exist { // 进入到 ServeMux 的 path，对应就是pattern
+		panic("http: multiple registrations for " + pattern)
+	}
+
+	if mux.m == nil {
+		mux.m = make(map[string]muxEntry)
+	}
+    e := muxEntry{h: handler, pattern: pattern} 
+    mux.m[pattern] = e // mux.m: pattern - (pattern, handler) 的map结构
+	if pattern[len(pattern)-1] == '/' { // 特殊的，以 '/' 结尾的pattern，添加到 mux.es 中
+		mux.es = appendSorted(mux.es, e)
+	}
+
+	if pattern[0] != '/' {
+		mux.hosts = true
+	}
+}
+
+func appendSorted(es []muxEntry, e muxEntry) []muxEntry {
+	n := len(es)
+	i := sort.Search(n, func(i int) bool {
+        // slice of entries sorted from longest to shortest.
+		return len(es[i].pattern) < len(e.pattern)
+	})
+	if i == n {
+		return append(es, e)
+	}
+    
+	// we now know that i points at where we want to insert
+	es = append(es, muxEntry{}) // try to grow the slice in place, any entry works.
+	copy(es[i+1:], es[i:])      // Move shorter entries down
+	es[i] = e
+	return es
+}
+~~~
+
+匹配路由的过程是这样的：
+
+~~~go
+// ServeHTTP dispatches the request to the handler whose
+// pattern most closely matches the request URL.
+func (mux *ServeMux) ServeHTTP(w ResponseWriter, r *Request) {
+	if r.RequestURI == "*" {
+		if r.ProtoAtLeast(1, 1) {
+			w.Header().Set("Connection", "close")
+		}
+		w.WriteHeader(StatusBadRequest)
+		return
+	}
+	h, _ := mux.Handler(r) // 寻找 HandlerFunc，相当于是入口
+	h.ServeHTTP(w, r)
+}
+
+func (mux *ServeMux) Handler(r *Request) (h Handler, pattern string) {
+    ...
+	return mux.handler(host, r.URL.Path)
+}
+
+func (mux *ServeMux) handler(host, path string) (h Handler, pattern string) {
+	mux.mu.RLock()
+	defer mux.mu.RUnlock()
+
+	// Host-specific pattern takes precedence over generic ones
+	if mux.hosts {
+		h, pattern = mux.match(host + path)
+	}
+	if h == nil {
+		h, pattern = mux.match(path)
+	}
+	if h == nil {
+		h, pattern = NotFoundHandler(), ""
+	}
+	return
+}
+
+// Find a handler on a handler map given a path string.
+// Most-specific (longest) pattern wins.
+func (mux *ServeMux) match(path string) (h Handler, pattern string) {
+	// Check for exact match first. 在 map[string]muxEntry 中作精确查找
+	v, ok := mux.m[path]
+	if ok {
+		return v.h, v.pattern
+	}
+
+	// Check for longest valid match.  mux.es contains all patterns
+	// that end in / sorted from longest to shortest.
+	for _, e := range mux.es {
+		if strings.HasPrefix(path, e.pattern) { // 判断 path 是否具有 e.pattern 的前缀
+			return e.h, e.pattern
+		}
+	}
+	return nil, ""
+}
+~~~
+
+路由匹配的核心逻辑是这样的：
+
+1. 在 `mux.m[path]` 中作 path 的精确匹配，若查找到则返回；
+2. 紧接着，在 `mux.es` 中查找，其排列顺序是 `mux.es[index].pattern` 从长到短依次排列的，且 pattern 的结尾是 `/` 字符。如果 path 具有某个 pattern 前缀，则表示匹配上了，并返回 handler；
+3. 否则，返回 `404 page not found`
+
+> 在注册阶段，path 进到进到标准库中是 pattern；在路由匹配阶段，path 就是路由——`r.URL.Path`。
+
+举个例子：
+
+~~~go
+func main() {
+	http.HandleFunc("/", indexHandleFunc)
+
+	http.HandleFunc("/hel/", helloHandleFunc)
+
+	log.Fatal(http.ListenAndServe(":9999", nil))
+}
+~~~
+
+当请求：`curl http://localhost:9999/hel/hello` 会执行 helloHandleFunc，请求 `curl http://localhost:9999/hello` 会访问 indexHandleFunc。
+
+另外，在上面标准库 net/http 的路由匹配时，是一种**静态路由匹配**，也就是说必须已注册的 pattern-handler。那如何实现**更灵活**的**动态路由**呢？
+
+> 所谓**动态路由**，即一条路由规则可以**匹配某一类型**而**非某一条固定的路由**。例如`/hello/:name`，可以匹配`/hello/geektutu`、`hello/jack`等。
+
+那接下来，要去**创建更高效率的路由匹配策略**，其中就包括寻找**适合当前问题场景**的**数据结构**：
+
+动态路由有很多种实现方式，支持的规则、性能等有很大的差异。实现动态路由最常用的数据结构，被称为**前缀树**(Trie树)。看到名字你大概也能知道前缀树长啥样了：**每一个节点的所有的子节点都拥有相同的前缀**。这种结构非常适用于路由匹配：
+
+- /:lang/doc
+- /:lang/tutorial
+- /:lang/intro
+- /about
+- /p/blog
+- /p/related
+
+HTTP请求的路径恰好是**由`/`分隔的多段**构成的，因此，**每一段**可以作为**前缀树的一个节点**。我们通过树结构查询，如果**中间某一层的节点**都**不满足条件**，那么就说明**没有匹配到的路由**，查询结束。
+
+![](./img/trie_router.jpg)
+
+创建的动态路由需具备如下功能：
+
+* **参数匹配`:`**。例如 `/p/:lang/doc`，可以匹配 `/p/c/doc` 和 `/p/go/doc`。
+* **通配`*`**。例如 `/static/*filepath`，可以匹配`/static/fav.ico`，也可以匹配`/static/js/jQuery.js`，这种模式常用于**静态服务器**，能够**递归**地匹配子路径。
 
