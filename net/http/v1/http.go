@@ -15,7 +15,7 @@ func main() {
 }
 
 func indexHandleFunc(w http.ResponseWriter, req *http.Request) {
-	fmt.Fprintf(w, req.RequestURI)
+	fmt.Fprintf(w, req.URL.Path)
 }
 
 func helloHandleFunc(w http.ResponseWriter, req *http.Request) {

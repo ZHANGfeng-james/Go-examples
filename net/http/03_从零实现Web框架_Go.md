@@ -540,7 +540,7 @@ func (router *router) handle(ctx *Context) { // 重构
 }
 ~~~
 
-接下来，把目光聚焦到 HTTP Request 上，让 Context 具备有解析 URL 中参数的能力：
+接下来，把目光聚焦到 HTTP Request 上，让 Context 具备有**解析 URL 中参数**的能力：
 
 ~~~go
 func (ctx *Context) postForm(key string) string {
@@ -745,7 +745,7 @@ func (mux *ServeMux) match(path string) (h Handler, pattern string) {
 }
 ~~~
 
-路由匹配的核心逻辑是这样的：
+net/http 标注库中的**路由匹配**核心逻辑是这样的：
 
 1. 在 `mux.m[path]` 中作 path 的精确匹配，若查找到则返回；
 2. 紧接着，在 `mux.es` 中查找，其排列顺序是 `mux.es[index].pattern` 从长到短依次排列的，且 pattern 的结尾是 `/` 字符。如果 path 具有某个 pattern 前缀，则表示匹配上了，并返回 handler；
@@ -791,3 +791,471 @@ HTTP请求的路径恰好是**由`/`分隔的多段**构成的，因此，**每�
 * **参数匹配`:`**。例如 `/p/:lang/doc`，可以匹配 `/p/c/doc` 和 `/p/go/doc`。
 * **通配`*`**。例如 `/static/*filepath`，可以匹配`/static/fav.ico`，也可以匹配`/static/js/jQuery.js`，这种模式常用于**静态服务器**，能够**递归**地匹配子路径。
 
+下面把注意力放在：**如何实现前缀树**，考虑如下**疑惑**：
+
+1. 前缀树是一个**树状结构**；
+2. 随着注册路由的增多，前缀树的每一个节点下，还会**新增多个节点**；
+3. 前缀树的节点可能会包含**一个 wild 字符**，此时这个节点称之为包含**通配符**的节点；
+4. 作为一个前缀树，如果拿到了前缀树的 rootNode，就相当于可以遍历整个前缀树；
+5. 需要为 HTTP 请求的每一种方法 GET、POST 等分别构建一棵前缀树；
+6. 在路由匹配时，如何判断一个路由 path 已在前缀树中获得对应的匹配？
+
+首先设计树节点上应该存储的信息量：
+
+~~~go
+// node constructor of router trie tree
+type node struct {
+	pattern  string  // 完整匹配路径
+	part     string  // 当前节点的匹配内容
+	children []*node // 每个节点下的子节点
+	isWild   bool    // 是否包含通配符（* 和 :）
+}
+~~~
+
+前缀树的构建和匹配，都是**一层一层**地经过**匹配**得到结果。path 和 node 匹配的逻辑：
+
+~~~go
+// matchChild matches children of node to find match one
+func (n *node) matchChild(path string) *node {
+	for _, ele := range n.children {
+		if ele.part == path || ele.isWild {
+			return ele
+		}
+	}
+	return nil
+}
+
+// matchChildren matches all children, and return all nodes
+func (n *node) matchChildren(path string) []*node {
+	nodes := make([]*node, 0)
+	for _, ele := range n.children {
+		if ele.part == path || ele.isWild {
+			nodes = append(nodes, ele)
+		}
+	}
+	return nodes
+}
+~~~
+
+比如前缀树中已注册了 `/p/:lang/doc` 的路由，在查找 `/p/go/doc` 时的过程是这样的：第一层精确匹配到了 `p`，第二层模糊匹配到了 `:lang`，对应设置参数 `[lang]=go`，再执行后续匹配。其中包含 `: / *` 通配符的 part 节点，其 isWild 值设置为 true。
+
+作为一个前缀树——数据结构——其最关键的步骤就是**构建**和**查找**：
+
+~~~go
+// insert trie tree node with pattern
+func (n *node) insert(pattern string, parts []string, height int) {
+	//TEST CASE: /p/:name/join [p, :name, join] 0
+	if len(parts) == height {
+		n.pattern = pattern
+		return
+	}
+
+	// TDD
+	// 0 --> p
+	// 1 --> :name
+	// 2 --> join
+
+	//FIXME /p/:name/join /p/:time/sell
+	//FIXME /p/:name /p/michoi
+	part := parts[height]
+	child := n.matchChild(part)
+	if child == nil {
+		// :name *filepath 存入 node.part
+		child = &node{part: part, isWild: part[0] == ':' || part[0] == '*'}
+		n.children = append(n.children, child)
+	}
+	child.insert(pattern, parts, height+1)
+}
+
+func (n *node) search(parts []string, height int) *node {
+	// just for * only once
+	if len(parts) == height || strings.HasPrefix(n.part, "*") {
+		if n.pattern == "" {
+			// middle path of route，并不是一个路由
+			return nil
+		}
+		return n
+	}
+
+	part := parts[height]
+	child := n.matchChildren(part)
+	// children 为 []*node，是否存在多个匹配情况
+	for _, item := range child {
+		result := item.search(parts, height+1)
+		if child != nil {
+			return result
+		}
+	}
+	return nil
+}
+~~~
+
+在构建前缀树的过程中，递归查找每一层的节点，如果没有匹配到当前节点的 part，则新建一个节点。只有到 len(parts) 的最后才能为节点的 pattern 赋值当前的 pattern，中间所有创建的节点的 pattern 都应该设置为空字符串。因此，在路由匹配时，如果在最后的一次匹配中，发现节点的 pattern 为空字符，则说明路由前缀树中是没有注册该路由的。
+
+路由的**基本数据结构**已经构建出来了，接下来需要将数据结构及其功能封装到 Router 中：
+
+~~~go
+type router struct {
+	roots    map[string]*node      // roots key eg. roots["GET"] roots["POST"]
+	handlers map[string]HandleFunc // handlers key eg. handlers["GET-/p/:name/join"] handlers["POST-/p/:name"]
+}
+
+func newRouter() *router {
+	return &router{
+		roots:    make(map[string]*node),
+		handlers: make(map[string]HandleFunc),
+	}
+}
+~~~
+
+作为一个 router，类型中包括了需要为每一种 HTTP method 构建的路由前缀树，roots 就是这些树的**数据结构**。比如 `roots["GET"]` 就是 GET 方法前缀树的根节点 `*node`。
+
+向路由前缀树中**添加路由**：
+
+~~~go
+func parsePattern(pattern string) []string {
+	// "/p/:name/join" --> [ ,p,:name,join] len() = 4
+	parts := strings.Split(pattern, "/")
+	vs := make([]string, 0)
+	for _, item := range parts {
+		if item != "" { // filte ""; for ""
+			vs = append(vs, item)
+			if item[0] == '*' { // only for * just once
+				break // pattern:/p/*name/* --> [p, *name]
+			}
+		}
+	}
+	return vs
+}
+
+func (router *router) addRoute(method, pattern string, handler HandleFunc) {
+	log.Printf("Route %4s - %s", method, pattern)
+	if pattern == "" {
+		panic("router pattern is empty path")
+	}
+
+	parts := parsePattern(pattern)
+
+	if _, ok := router.roots[method]; !ok {
+		router.roots[method] = &node{} // 每棵树的根节点都是空的
+	}
+	// insert(pattern string, parts []string, height int)
+	router.roots[method].insert(pattern, parts, 0)
+
+	key := method + "-" + pattern
+	router.handlers[key] = handler
+}
+~~~
+
+在路由前缀树中**查找** path 对应的 pattern：
+
+~~~go
+func (router *router) getRoute(method, path string) (*node, map[string]string) {
+	root, ok := router.roots[method]
+	if !ok {
+		return nil, nil
+	}
+
+	// coding 锻炼写代码的逻辑，第一步做什么，第二步做什么...... Input/Output 分别是什么
+	// read code 掌握代码背后的设计（思路和艺术），为什么这么设计，如果是我，我该如何设计
+	parts := parsePattern(path)
+	node := root.search(parts, 0)
+	if node != nil {
+		params := make(map[string]string)
+		for index, item := range parsePattern(node.pattern) {
+			if item[0] == ':' {
+				params[item[1:]] = parts[index]
+			}
+			if item[0] == '*' && len(item) > 1 {
+				params[item[1:]] = strings.Join(parts[index:], "/")
+			}
+		}
+		return node, params
+	}
+
+	return nil, nil
+}
+~~~
+
+另外，在查询路由时，已经解析得到了对应的 URL 参数。在 Context 中增加了 Params 字段，用于保存参数：
+
+~~~go
+type Context struct {
+	Writer  http.ResponseWriter
+	Request *http.Request
+
+	Path   string
+	Method string
+
+	Params map[string]string
+
+	StatusCode int
+}
+
+func (ctx *Context) Param(key string) (value string, ok bool) {
+	value, ok = ctx.Params[key]
+	return
+}
+
+func (router *router) handle(ctx *Context) {
+	log.Printf("Receive: %4s - %s", ctx.Method, ctx.Path)
+	if node, params := router.getRoute(ctx.Method, ctx.Path); node != nil {
+		key := ctx.Method + "-" + node.pattern
+		ctx.Params = params
+		router.handlers[key](ctx)
+	} else {
+		ctx.String(http.StatusNotFound, "404 page not found, Path:%s", ctx.Path)
+	}
+}
+~~~
+
+对 router 这个模块功能做单元测试：
+
+~~~go
+package gee
+
+import (
+	"fmt"
+	"reflect"
+	"testing"
+)
+
+func TestParsePattern(t *testing.T) {
+	ok := reflect.DeepEqual(parsePattern("/p/:name"), []string{"p", ":name"})
+	ok = ok && reflect.DeepEqual(parsePattern("/p/*"), []string{"p", "*"})
+	// parsePattern only for * just once
+	ok = ok && reflect.DeepEqual(parsePattern("/p/*name/*"), []string{"p", "*name"})
+
+	if !ok {
+		t.Fatal("test parsePattern failed")
+	}
+}
+
+func initTrieTree() *router {
+	router := newRouter()
+
+	// addRoute(method, pattern string, handler HandleFunc)
+	router.addRoute("GET", "/", nil)
+	router.addRoute("GET", "/hello/:name", nil)
+	router.addRoute("GET", "/hello/b/c", nil)
+	router.addRoute("GET", "/hi/:name", nil)
+	router.addRoute("GET", "/assets/*filepath", nil)
+	return router
+}
+
+func TestGetRoute(t *testing.T) {
+	router := initTrieTree()
+
+	path := "/hello/geektutu"
+	// getRoute(method, path string) (*node, map[string]string)
+	node, params := router.getRoute("GET", path)
+
+	if node == nil {
+		t.Fatal("there is a router for /hello/geektutu")
+	}
+	if node.pattern != "/hello/:name" {
+		t.Fatal("pattern should be /hello/:name")
+	}
+	if params["name"] != "geektutu" {
+		t.Fatal("param should be equal to 'geektutu'")
+	}
+	fmt.Printf("Path:%s, found: %s, params: %s\n", path, node.pattern, params["name"])
+}
+
+func TestGetRouteWithWildStar(t *testing.T) {
+	router := initTrieTree()
+	path := "/assets/file1.txt"
+	node, params := router.getRoute("GET", path)
+	ok := node.pattern == "/assets/*filepath"
+	if !ok {
+		t.Fatalf("Path: %s, pattern should be %s\n", path, "/assets/*filepath")
+	}
+	ok = params["filepath"] == "file1.txt"
+	if !ok {
+		t.Fatalf("Path:%s, params should be %s\n", path, "file1.txt")
+	}
+	fmt.Printf("Path:%s, found: %s, params: %s\n", path, node.pattern, params["filepath"])
+
+	path = "/assets/dir/404.css"
+	node, params = router.getRoute("GET", path)
+	ok = node.pattern == "/assets/*filepath"
+	if !ok {
+		t.Fatalf("Path: %s, pattern should be %s\n", path, "/assets/*filepath")
+	}
+	ok = params["filepath"] == "dir/404.css"
+	if !ok {
+		t.Fatalf("Path:%s, params should be %s\n", path, "dir/404.css")
+	}
+	fmt.Printf("Path:%s, found: %s, params: %s\n", path, node.pattern, params["filepath"])
+}
+~~~
+
+单元测试中构造的路由前缀树：
+
+![](./img/Snipaste_2021-09-17_16-37-46.png)
+
+注册了 `/hello/:name` 和 `/hello/a/c`，下面来拿看看**路由匹配实例**：
+
+1. HTTP GET `/hello/a`：对应的 pattern 是 `/hello/:name`
+2. HTTP GET `/hello/a/c`：对应的 pattern 是 `/hello/a/c`，此时没有 name 参数
+
+完成上面所有的内容后，下面看看用户如何使用：
+
+~~~go
+package main
+
+import (
+	"goweb/gee"
+	"net/http"
+)
+
+func main() {
+	engine := gee.New()
+
+	...
+
+	engine.GET("/hello/:name", func(ctx *gee.Context) {
+		ctx.String(http.StatusOK, "hello %s, you're at %s\n", ctx.Param("name"), ctx.Path)
+	})
+	engine.GET("/hello", func(ctx *gee.Context) {
+		ctx.String(http.StatusOK, "hello %s, you're at %s\n", ctx.Query("name"), ctx.Path)
+	})
+	engine.GET("/assets/*filepath", func(ctx *gee.Context) {
+		ctx.JSON(http.StatusOK, gee.H{"filepath": ctx.Param("filepath")})
+	})
+
+	engine.Run(":9999")
+}
+~~~
+
+### 路由分组
+
+先来一波烧脑的疑惑：
+
+1. 路由分组的概念是什么？
+2. 为什么需要路由分组？
+3. 路由分组和中间件有什么关系？
+4. 如何实现路由分组？可以先想象一下路由分组应该是怎样实现的？如何让分组路由的使用尽可能简洁？
+
+
+
+软件设计中的**概念**，比如某个模型等，很多都是来自现实的使用场景，也就是**需求**。
+
+比如：路由分组，或分组路由。如果没有路由分组，我们就需要针对每一个路由分别进行控制。但是真实的业务场景种，往往**某一个组路由**需要**相似的处理**。例如：
+
+* 以 `/post` 开头的路由**匿名**可访问。
+* 以 `/admin` 开头的路由**需要鉴权**。
+* 以 `/api` 开头的路由是 RESTful 接口，可以对接第三方平台，需要三方平台鉴权。
+
+大部分情况下的路由分组，是以**相同的前缀**来区分的。因此，下面将要实现的分组控制也是以前缀来区分，并且支持分组的**嵌套**。另外还要考虑**中间件**在分组上的作用，比如 `/admin` 分组，可以应用鉴权中间件。
+
+那考虑将路由分组做一个**模型**来实现，也就对应一个**类型**。下面就需要考虑这个类型需要**具备的属性**，另外 RouterGroup 对象还需要有访问 router 的能力，为了方便，可以在 RouterGroup 中，保存一个指针，指向 Engine：
+
+~~~go
+type (
+	Engine struct {
+		router       *router
+		*RouterGroup // 内嵌*RouterGroup，*Engin类型具有*RouterGroup的所有方法
+	}
+
+	RouterGroup struct {
+		engine     *Engine
+		prefix     string
+		parent     *RouterGroup // struct中不能定义相同类型的字段
+		middleware []HandleFunc // middleware处理
+	}
+)
+~~~
+
+也就是将 Engine 作为了**最顶层的分组**，而且所有的 RouterGroup 都使用相同的 Engine 实例。
+
+~~~go
+func New() *Engine {
+	engine := &Engine{router: newRouter()}
+	// 为内嵌字段赋值的方法：engine.RouterGroup
+	engine.RouterGroup = &RouterGroup{engine: engine}
+	// engine.RouterGroup.prefix 为空
+	// engine.RouterGroup.parent 为 nil
+	// engine.RouterGroup.middleware 为 nil
+
+	return engine
+}
+
+func (group *RouterGroup) NewRouterGroup(prefix string) *RouterGroup {
+	// 所有的 RouterGroup 共享同一个*Engine
+	engine := group.engine
+
+	newGroup := &RouterGroup{}
+	newGroup.engine = engine
+	newGroup.prefix = group.prefix + prefix // 拼接 prefix
+	newGroup.parent = group
+
+	newGroup.middleware = nil
+
+	return newGroup
+}
+~~~
+
+紧接着将 Engine 的方法**重构**成 RouterGroup 的方法：
+
+~~~go
+func (group *RouterGroup) GET(path string, handler HandleFunc) {
+	group.addRoute("GET", path, handler)
+}
+
+func (group *RouterGroup) POST(path string, handler HandleFunc) {
+	group.addRoute("POST", path, handler)
+}
+
+func (group *RouterGroup) addRoute(method, component string, handler HandleFunc) {
+	pattern := group.prefix + component // 拼接 group.prefixe 和 component
+	log.Printf("component: %s, pattern: %s\n", component, pattern)
+	group.engine.router.addRoute(method, pattern, handler)
+}
+~~~
+
+下面来看看用户的使用情况：
+
+~~~go
+package main
+
+import (
+	"goweb/gee"
+	"net/http"
+)
+
+func main() {
+	engine := gee.New()
+	...
+	helloGroup := engine.NewRouterGroup("/v1")
+	{
+		// 获得一个 RouterGroup 后，直接使用该类型注册 pattern
+		helloGroup.GET("/:name", func(ctx *gee.Context) {
+			ctx.String(http.StatusOK, "hello %s, you're at %s\n", ctx.Param("name"), ctx.Path)
+		})
+		helloGroup.GET("/geektutu/join", func(ctx *gee.Context) {
+			ctx.String(http.StatusOK, "hello %s, you're at %s\n", ctx.Query("name"), ctx.Path)
+		})
+	}
+
+	v2 := engine.NewRouterGroup("/v2")
+	{
+		v2.GET("/", func(ctx *gee.Context) {
+			ctx.String(http.StatusOK, "you're at %s\n", ctx.Path)
+		})
+		v2.GET("/help", func(ctx *gee.Context) {
+			ctx.String(http.StatusOK, "you're at %s\n", ctx.Path)
+		})
+	}
+
+	engine.Run(":9999")
+}
+~~~
+
+### 中间件
+
+烧脑的疑惑：
+
+1. 中间件是什么？为什么存在中间件这个概念？
+2. 如何在 Web 框架中实现中间件？
+3. 中间件如何触发执行？如何自定义中间件的执行顺序？
