@@ -13,7 +13,7 @@ type Data struct {
 	Exact      bool     `http:"exact"`
 }
 
-func main() {
+func test() {
 	data := Data{
 		MaxResults: 10,
 	}
