@@ -45,16 +45,16 @@ func (s *Session) Exec() (result sql.Result, err error) {
 
 func (s *Session) QueryRow() *sql.Row {
 	defer s.Clear()
-	log.Info(s.sql.String, s.sqlVars)
+	log.Info(s.sql.String(), s.sqlVars)
 	// 调用的是 sql.DB 的 QueryRow 函数，仅返回一行结果
-	return s.DB().QueryRow(s.sql.String(), s.sqlVars)
+	return s.DB().QueryRow(s.sql.String(), s.sqlVars...)
 }
 
 func (s *Session) QueryRows() (rows *sql.Rows, err error) {
 	defer s.Clear()
-	log.Info(s.sql.String, s.sqlVars)
+	log.Info(s.sql.String(), s.sqlVars)
 	// 调用的是 sql.DB 的 Query 函数，可返回多行结果
-	if rows, err = s.DB().Query(s.sql.String(), s.sqlVars); err != nil {
+	if rows, err = s.DB().Query(s.sql.String(), s.sqlVars...); err != nil {
 		log.Error(err)
 	}
 	return

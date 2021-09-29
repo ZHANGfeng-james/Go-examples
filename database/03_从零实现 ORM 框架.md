@@ -39,13 +39,13 @@ var users []User
 orm.Find(&users)
 ~~~
 
-ORM 框架相当于**对象和数据库中间的一个桥梁**，借助 ORM 可以避免写繁琐的 SQL 语句，仅仅通过操作具体的对象，就能够完成对关系型数据库的操作。那**实现一个 ORM 框架需要考虑哪些问题**：
+ORM 框架相当于**对象和数据库中间的一个桥梁**，借助 ORM 可以**避免写繁琐的 SQL 语句**，仅仅通过操作具体的对象，就能够完成对关系型数据库的操作。那**实现一个 ORM 框架需要考虑哪些问题**：
 
-* `CreateTable` 方法需要从参数 `&User{}` 得到对应的结构体的名称 User 作为表名，成员变量 Name、Age 作为列名，同时还需要知道成员变量对应的类型。上述所有的信息，都是创建一张 Table 必须要的！
+* `CreateTable` 方法需要从参数 `&User{}` 得到对应的结构体的名称 User 作为**表名**，成员变量 Name、Age 作为**列名**，同时还需要知道成员变量对应的**类型**。上述所有的信息，都是创建一张 Table 必须要的！
 * `Save` 方法则需要知道每个成员变量的值。
-* `Find` 方法仅从传入的空切片 `&[]User` 得到对应的结构体名也就是表名 User，并从数据库中取到所有的记录，将其**转换**成 User 对象（即：数据库查询的结构转换成对象），添加到切片中。
+* `Find` 方法仅从传入的空切片 `&[]User` 得到对应的结构体名也就是**表名** User，并从数据库中取到所有的记录，将其**转换**成 User 对象（即：数据库查询的结构转换成对象），添加到切片中。
 
-另外，ORM 框架是通用的，也就是说可以将**任意合法的对象**转换成数据库中的表和记录。应用工程中，可能会使用多个类型，比如 User、Account、Passenger、Password 等等，都是不一样的类型，对应的就会有很多张不同的表。
+另外，ORM 框架是通用的，也就是说可以将**任意合法的对象**转换成数据库中的表和记录。应用在工程中，可能会使用多个类型，比如 User、Account、Passenger、Password 等等，都是不一样的类型，对应的就会有很多张不同的表。
 
 ~~~go
 type Account struct {
@@ -221,7 +221,7 @@ COUNT(*)
 2
 ~~~
 
-有了实验的环境，再来看看 Go 语言提供的和 DB 相关的标准库：
+有了实验的环境，再来看看 Go 语言提供的和 DB 相关的**标准库函数和类型**：
 
 * database/sql 中的**函数**：
 
@@ -335,7 +335,7 @@ var (
 	mu       sync.Mutex
 )
 
-// log method
+// log method，导出 Logger 上的方法
 var (
 	Error  = errorLog.Println
 	Errorf = errorLog.Printf
@@ -365,7 +365,7 @@ func SetLevel(level int) {
 - 这一部分的实现非常简单，三个层级声明为三个常量，通过控制 `Output`，来控制日志是否打印。
 - 如果设置为 ErrorLevel，infoLog 的输出会被定向到 `ioutil.Discard`，即不打印该日志。
 
-如果使用层级思维来考虑 ORM 库的实现，最底层的应该是**直接与 RDBMS 的交互**，也就是 CRUD 操作的执行：
+如果使用**层级**思维来考虑 ORM 库的实现，最底层的应该是**直接与 RDBMS 的交互**，也就是 CRUD 操作的执行：
 
 ~~~go
 package session
@@ -415,16 +415,16 @@ func (s *Session) Exec() (result sql.Result, err error) {
 
 func (s *Session) QueryRow() *sql.Row {
 	defer s.Clear()
-	log.Info(s.sql.String, s.sqlVars)
+    log.Info(s.sql.String(), s.sqlVars)
 	// 调用的是 sql.DB 的 QueryRow 函数，仅返回一行结果
 	return s.DB().QueryRow(s.sql.String(), s.sqlVars)
 }
 
 func (s *Session) QueryRows() (rows *sql.Rows, err error) {
 	defer s.Clear()
-	log.Info(s.sql.String, s.sqlVars)
+    log.Info(s.sql.String(), s.sqlVars)
 	// 调用的是 sql.DB 的 Query 函数，可返回多行结果
-	if rows, err = s.DB().Query(s.sql.String(), s.sqlVars); err != nil {
+	if rows, err = s.DB().Query(s.sql.String(), s.sqlVars...); err != nil {
 		log.Error(err)
 	}
 	return
@@ -523,21 +523,745 @@ Exec success, 2 affected
 
 # 对象表结构映射
 
+对象表结构映射，解决的问题就是：**程序中的一个结构体指针（结构体）变量，转化为数据库中的一张表**。与之相关的，就是要获取到这个结构体指针（结构体）变量中各个字段的名称、类型和其他能够转化为表结构的约束信息。
 
+SQL 语句中的**类型**和 Go 语言中的**类型**是不同的，例如Go 语言中的 `int`、`int8`、`int16` 等类型均对应 SQLite 中的 `integer` 类型。因此实现 ORM 映射的第一步，需要思考如何将 Go 语言的类型映射为数据库中的类型。
 
+> 如果我是 RDBMS 的设计者，我也不会去**跟随**具体的编程语言。每一种编程语言的类型都不相同，而它们都需要和 RDBMS 交互，那是不是要为每一种编程语言在 RDBMS 中设计一种对应的类型呢？
+>
+> 与其如此，何不就在 RDBMS 中自成一体设计出一套自己的类型系统！
 
+同时，不同数据库支持的数据类型也是有差异的，即使功能相同，在 **SQL 语句的表达**上也可能有差异。ORM 框架往往需要兼容多种数据库，因此我们需要将**差异**的这一部分提取出来，**每一种数据库分别实现，实现最大程度的复用和解耦**。这部分代码称之为 `dialect`。
 
- 
+> `dialect`：a particular form of a language which is peculiar to a specific region or social group.
+>
+> 方言
 
+下面实现各种 RDBMS 的差异部分：
 
+~~~go
+package dialect
 
+import (
+	"fmt"
+	"reflect"
+)
 
+var dialectsMap = map[string]Dialect{} // 进程全局保存注册的 name - Dialect
 
+type Dialect interface {
+	DataTypeOf(typ reflect.Value) string                        // Go-type convert to RDMS-type
+	TableExistSQLStmt(tableName string) (string, []interface{}) // 指定tablename是否存在的SQL语句
+}
 
+func RegisterDialect(name string, dialect Dialect) {
+	_, ok := GetDialect(name)
+	if ok {
+		panic(fmt.Sprintf("dialect for %s just registe once", name))
+	}
+	dialectsMap[name] = dialect
+}
 
+func GetDialect(name string) (dialect Dialect, ok bool) {
+	dialect, ok = dialectsMap[name]
+	return
+}
+~~~
 
+每一种 RDBMS 都对应有一种 Dialect，也就是差异的部分。比如对于 sqlite3 这种 RDBMS 对应的实现就是：
+
+~~~go
+package dialect
+
+import (
+	"fmt"
+	"reflect"
+	"time"
+)
+
+type sqlite3 struct{}
+
+func init() {
+	//FIXME 此处可能会导致空指针异常，var _ Dialect = (*sqlite3)(nil) 强制初始化 dialog.go
+	RegisterDialect("sqlite3", &sqlite3{})
+}
+
+// DataTypeOf convert Go-type to RDMS-type
+func (s *sqlite3) DataTypeOf(typ reflect.Value) string {
+	switch typ.Kind() {
+	case reflect.Bool:
+		return "bool" // type of RDBMS
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uintptr:
+		return "integer"
+	case reflect.Int64, reflect.Uint64:
+		return "bigint"
+	case reflect.Float32, reflect.Float64:
+		return "real"
+	case reflect.String:
+		return "text"
+	case reflect.Array, reflect.Slice: // 使用实例？看看别人是怎么使用的
+		return "blob"
+	case reflect.Struct:
+		if _, ok := typ.Interface().(time.Time); ok {
+			return "datetime"
+		}
+	}
+	panic(fmt.Sprintf("invalid sql type %s (%s)", typ.Type().Name(), typ.Kind()))
+}
+
+func (s *sqlite3) TableExistSQLStmt(tableName string) (string, []interface{}) {
+	args := []interface{}{tableName}
+	return "SELECT name FROM sqlite_master WHERE type='table' and name = ?", args
+}
+~~~
+
+对于 sqlite3 这种 dialect，实现了 Dialect 中的接口，也就是与其他关系型数据库管理系统的差异。不同数据库之间的差异远远不止这两个地方，随着 ORM 框架功能的增多，dialect 的实现也会逐渐丰富起来，同时框架的其他部分不会受到影响。
+
+如下实现对 sqlite3.go 的测试：
+
+~~~go
+package dialect
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestDataTypeOf(t *testing.T) {
+	p := []struct {
+		Values interface{}
+		Type   string
+	}{
+		{"Tom", "text"},
+		{123, "integer"},
+		{1.23, "real"},
+		{[]int{1, 2, 3, 4}, "blob"},
+	}
+	// 在执行 TestDataTypeOf 时，已经调用了sqlite3.go中的init()
+	sqlDB, ok := GetDialect("sqlite3")
+	if ok {
+		for _, parameter := range p {
+			if typ := sqlDB.DataTypeOf(reflect.ValueOf(parameter.Values)); typ != parameter.Type {
+				t.Fatalf("Type of %v is %s, got:%s", parameter.Values, parameter.Type, typ)
+			}
+		}
+	}
+}
+~~~
+
+Dialect 实现了一些特定的 SQL 语句的转换，接下来我们将要实现 ORM 框架中最为核心的转换——对象(object)和表(table)的转换。给定一个**任意的对象**，转换为关系型数据库中的**表结构**。在数据库中创建一张表需要哪些**要素**呢？
+
+- **表名**(table name) —— 结构体名(struct name)
+- **字段名和字段类型** —— 成员变量和类型。
+- **额外的约束条件**(例如非空、主键等) —— 成员变量的Tag（Go 语言通过 Tag 实现，Java、Python 等语言通过注解实现）
+
+比如：Go 程序中定义的一个结构体类型
+
+~~~go
+type User struct {
+    Name string `geeorm:"PRIMARY KEY"`
+    Age  int
+}
+~~~
+
+对应转化成数据库管理系统中的建表语句：
+
+~~~sql
+CREATE TABLE `User` (`Name` text PRIMARY KEY, `Age` integer);
+~~~
+
+也就是需要从一个结构体中解析上述要素：
+
+~~~go
+package schema
+
+import (
+	"go/ast"
+	"reflect"
+
+	"github.com/go-examples-with-tests/database/v2/dialect"
+)
+
+// 一张 Table 中，Column 相关的信息
+type Field struct {
+	Name string
+	Type string
+	Tag  string
+}
+
+type Schema struct {
+	Model      interface{}       // 值，一般是指针类型的值
+	Name       string            // 类型名，指针类型的值中解析出类型名，作为表名
+	Fields     []*Field          // 表相关的所有列信息
+	FieldNames []string          // 表相关的所有列名（字段名）
+	fieldMap   map[string]*Field // 列名（字段名） - 列信息
+}
+
+type ITableName interface {
+	TableName() string
+}
+
+func (schema *Schema) GetField(name string) *Field {
+	return schema.fieldMap[name]
+}
+
+func Parse(dest interface{}, d dialect.Dialect) *Schema {
+	// 依据具体的 dialect.Dialect 作类型转换
+	modelType := reflect.Indirect(reflect.ValueOf(dest)).Type()
+
+	var tableName string
+	t, ok := dest.(ITableName) // 是否实现ITableName接口，可自定义表名
+	if !ok {
+		tableName = modelType.Name()
+	} else {
+		tableName = t.TableName()
+	}
+
+	schema := &Schema{
+		Model:    dest,
+		Name:     tableName,
+		fieldMap: make(map[string]*Field),
+	}
+
+	for i := 0; i < modelType.NumField(); i++ {
+		p := modelType.Field(i) // StructField 类型
+		if !p.Anonymous && ast.IsExported(p.Name) {
+			field := &Field{
+				Name: p.Name,
+				// reflect.Indirect(reflect.New(p.Type)) --> 创建指针类型实例，并访问
+				Type: d.DataTypeOf(reflect.Indirect(reflect.New(p.Type))),
+			}
+			if v, ok := p.Tag.Lookup("geeorm"); ok {
+				field.Tag = v
+			}
+			schema.Fields = append(schema.Fields, field)
+			schema.FieldNames = append(schema.FieldNames, p.Name)
+			schema.fieldMap[p.Name] = field
+		}
+	}
+	return schema
+}
+
+func (schema *Schema) RecordValues(dest interface{}) []interface{} {
+	destValue := reflect.Indirect(reflect.ValueOf(dest)) // reflect.Value
+	var fieldValues []interface{}
+	for _, field := range schema.Fields {
+		// reflect.Value struct --> value
+		fieldValues = append(fieldValues, destValue.FieldByName(field.Name).Interface())
+	}
+	return fieldValues
+}
+~~~
+
+整个解析的过程使用的原理：Go reflect 机制。
+
+~~~go
+package schema
+
+import (
+	"testing"
+
+	"github.com/go-examples-with-tests/database/v2/dialect"
+)
+
+type User struct {
+	Name string `geeorm:"PRIMARY KEY"` // struct的TAG有固定的格式，写错则无效！
+	Age  int
+}
+
+func TestSchema(t *testing.T) {
+	dialect, _ := dialect.GetDialect("sqlite3")
+
+	user := &User{}
+	userSchema := Parse(user, dialect)
+	if userSchema.Name != "User" && len(userSchema.Fields) != 2 {
+		t.Fatal("schema parse User error")
+	}
+	if userSchema.fieldMap["Name"].Tag != "PRIMARY KEY" {
+		t.Fatal("schema parse User error")
+	}
+}
+
+func TestRecordValue(t *testing.T) {
+	user := &User{
+		Name: "Tom",
+		Age:  18,
+	}
+
+	dialect, _ := dialect.GetDialect("sqlite3")
+
+	schema := Parse(user, dialect)
+	values := schema.RecordValues(user)
+
+	name := values[0].(string)
+	age := values[1].(int)
+	if name != "Tom" && age != 18 {
+		t.Fatal("record value is error")
+	}
+}
+
+type Password struct {
+	Len     int
+	Content string
+}
+
+func (p *Password) TableName() string {
+	return "test_password_name"
+}
+
+func TestSchemaPassword(t *testing.T) {
+	dialect, _ := dialect.GetDialect("sqlite3")
+
+	password := &Password{}
+	passwordSchema := Parse(password, dialect)
+	if passwordSchema.Name != password.TableName() && len(passwordSchema.Fields) != 2 {
+		t.Fatal("schema parse Password error")
+	}
+}
+~~~
+
+Session 的核心功能是与数据库进行交互，因此，我们将**数据库表的增/删操作**实现在子包 session 中。在此之前，Session 的结构需要做一些调整。
+
+~~~go
+type Session struct {
+	db      *sql.DB         // 数据库实例，用于和数据库交互，执行 CRUD 操作
+	sql     strings.Builder // SQL 语句
+	sqlVars []interface{}   // SQL 语句中的 ? 占位符对应的参数
+
+	dialect  dialect.Dialect
+	refTable *schema.Schema
+}
+
+func New(db *sql.DB, dialect dialect.Dialect) *Session {
+	return &Session{
+		db:      db,
+		dialect: dialect,
+	}
+}
+~~~
+
+新增方法：
+
+~~~go
+func (s *Session) Model(value interface{}) *Session {
+	if s.refTable == nil || reflect.TypeOf(value) != reflect.TypeOf(s.refTable.Model) { // 指针值
+		s.refTable = schema.Parse(value, s.dialect)
+	}
+	return s
+}
+
+func (s *Session) RefTable() *schema.Schema {
+	if s.refTable == nil {
+		log.Error("Model is not set")
+	}
+	return s.refTable
+}
+~~~
+
+实现数据库表的创建、删除和判断是否存在的功能。三个方法的实现逻辑是相似的，利用 `RefTable()` 返回的数据库表和字段的信息，拼接出 SQL 语句，调用原生 SQL 接口执行。
+
+~~~go
+func (s *Session) CreateTable() error {
+	table := s.RefTable()
+	var columns []string
+	for _, field := range table.Fields {
+		columns = append(columns, fmt.Sprintf("%s %s %s", field.Name, field.Type, field.Tag))
+	}
+	desc := strings.Join(columns, ",")
+	_, err := s.Raw(fmt.Sprintf("CREATE TABLE %s (%s);", table.Name, desc)).Exec()
+	return err
+}
+
+func (s *Session) DropTable() error {
+	_, err := s.Raw(fmt.Sprintf("DROP TABLE IF EXISTS %s", s.refTable.Name)).Exec()
+	return err
+}
+
+func (s *Session) HasTable() bool {
+	sql, values := s.dialect.TableExistSQLStmt(s.refTable.Name)
+	log.Infof("HasTable: %s, args:%v", sql, values)
+	row := s.Raw(sql, values...).QueryRow()
+
+	var tmp string
+	_ = row.Scan(&tmp)
+	log.Infof("Query:%s, Got:%s", s.refTable.Name, tmp)
+	return tmp == s.refTable.Name
+}
+~~~
+
+对应的测试用例：
+
+~~~go
+package session
+
+import (
+	"database/sql"
+	"fmt"
+	"os"
+	"testing"
+
+	"github.com/go-examples-with-tests/database/v2/dialect"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+type User struct {
+	Name string `geeorm:"PRIMARY KEY"`
+}
+
+var (
+	TestDB         *sql.DB
+	TestDialect, _ = dialect.GetDialect("sqlite3")
+)
+
+func TestMain(m *testing.M) { // 这个方法在所有测试用例之前执行
+	fmt.Println("Main")
+	TestDB, _ = sql.Open("sqlite3", "../../gee.db")
+	code := m.Run()
+	_ = TestDB.Close()
+	os.Exit(code)
+}
+
+func TestSession(t *testing.T) {
+	session := New(TestDB, TestDialect)
+	session.Model(&User{})
+
+	session.DropTable()
+	session.CreateTable()
+	if !session.HasTable() {
+		t.Fatal("create table error!")
+	}
+}
+
+func TestModel(t *testing.T) {
+	session := New(TestDB, TestDialect)
+	session.Model(&User{})
+	table := session.refTable
+
+	session.Model(&Session{})
+
+	if table.Name != "User" || session.refTable.Name != "Session" {
+		t.Fatal("failed to change model")
+	}
+}
+~~~
+
+Session 增加了对 dialect.Dialect 的依赖，调整 Engine：
+
+~~~go
+package orm
+
+import (
+	"database/sql"
+
+	"github.com/go-examples-with-tests/database/v2/dialect"
+	"github.com/go-examples-with-tests/database/v2/log"
+	"github.com/go-examples-with-tests/database/v2/session"
+)
+
+type Engine struct {
+	db      *sql.DB
+	dialect dialect.Dialect
+}
+
+func NewEngine(driver, source string) (e *Engine, err error) {
+	db, err := sql.Open(driver, source)
+	if err != nil {
+		log.Error(err)
+		return
+	}
+
+	if err = db.Ping(); err != nil {
+		log.Error(err)
+		return
+	}
+
+	dial, ok := dialect.GetDialect(driver)
+	if !ok {
+		log.Errorf("get dialect: %s error", driver)
+		return
+	}
+
+	e = &Engine{db: db, dialect: dial}
+	log.Info("Connect database success")
+	return
+}
+
+func (engine *Engine) Close() {
+	if err := engine.db.Close(); err != nil {
+		log.Error("Failed to close database")
+	}
+	log.Info("Close database success")
+}
+
+func (engine *Engine) NewSession() *session.Session {
+	return session.New(engine.db, engine.dialect)
+}
+~~~
+
+至此，完成了对象表结构映射的目标：
+
+1. 为隔离不同数据库管理系统的差异，创建了 Dialect，实现 sqlite3 的实例；
+2. 使用 reflect 实现了从结构体类型中获取字段名、类型、Tag，并转化为 Table；
+3. 实现创建 Table、删除 Table和判断 Table 是否存在的操作。
 
 # 记录新增和查询
+
+查询语句一般由多个**字句（Clause）**构成：
+
+~~~sql
+SELECT col1, col2, ...
+	FROM table_name
+	WHERE [condition]
+	GROUP BY col1
+	HAVING [condition];
+~~~
+
+也就是说，如果想一次构造出完整的 SQL 语句是比较困难的，由此将构造 SQL 语句这一部分独立处理啊，放在新创建的子包 clause 中实现。也就是说，**实现各种子句的生成规则**：
+
+~~~go
+package clause
+
+import (
+	"fmt"
+	"strings"
+)
+
+type generator func(values ...interface{}) (string, []interface{})
+
+var generators map[Type]generator
+
+func init() {
+	generators = make(map[Type]generator)
+
+	generators[INSERT] = _insert
+	generators[VALUES] = _values
+	generators[SELECT] = _select
+	generators[LIMIT] = _limit
+	generators[WHERE] = _where
+	generators[ORDERBY] = _orderBy
+}
+
+func genBindVars(num int) string {
+	var vars []string
+	for i := 0; i < num; i++ {
+		vars = append(vars, "?")
+	}
+	return strings.Join(vars, ", ")
+}
+
+func _insert(values ...interface{}) (string, []interface{}) {
+	tableName := values[0]
+	fields := strings.Join(values[1].([]string), ",")
+	return fmt.Sprintf("INSERT INTO %s (%v)", tableName, fields), []interface{}{}
+}
+
+func _values(values ...interface{}) (string, []interface{}) {
+	var sql strings.Builder
+	sql.WriteString("VALUES ")
+
+	var bindStr string
+	var vars []interface{}
+
+    // 构造成这样的形式：VALUES (?, ?), (?, ?), (?, ?)  [Katyusha 31 Sam 32 Jason 33]
+	for i, value := range values {
+		v := value.([]interface{})
+		if bindStr == "" {
+			bindStr = genBindVars(len(v))
+		}
+		sql.WriteString(fmt.Sprintf("(%v)", bindStr))
+		if i+1 != len(values) {
+			sql.WriteString(", ")
+		}
+		vars = append(vars, v...)
+	}
+
+	return sql.String(), vars
+}
+
+func _select(values ...interface{}) (string, []interface{}) {
+	tableName := values[0]
+	// values[1] 是什么类型？按照 []string 类型转换
+	fields := strings.Join(values[1].([]string), ",")
+	return fmt.Sprintf("SELECT %v FROM %s", fields, tableName), []interface{}{}
+}
+
+func _limit(values ...interface{}) (string, []interface{}) {
+	return "LIMIT ?", values
+}
+
+func _where(values ...interface{}) (string, []interface{}) {
+	desc, vars := values[0], values[1:]
+	return fmt.Sprintf("WHERE %s", desc), vars
+}
+
+func _orderBy(values ...interface{}) (string, []interface{}) {
+	// []interface{}指明是 interface{} 的数组类型：[]interface{}
+    // []interface{}{} 是 []interface{}类型的值
+	return fmt.Sprintf("ORDER BY %s", values[0]), []interface{}{} 
+}
+~~~
+
+紧接着的就是拼接各个字句，组成 SQL 语句：
+
+~~~go
+package clause
+
+import "strings"
+
+type Type int
+
+const (
+	INSERT Type = iota
+	VALUES
+	SELECT
+	LIMIT
+	WHERE
+	ORDERBY
+)
+
+type Clause struct {
+	sql     map[Type]string        // Type -- SQL
+	sqlVars map[Type][]interface{} // Type -- Vars
+}
+
+func (c *Clause) Set(name Type, vars ...interface{}) {
+	if c.sql == nil {
+		c.sql = make(map[Type]string)
+		c.sqlVars = make(map[Type][]interface{})
+	}
+	//FIXME 根据 name 生成对应的 SQL 语句，此处一定要注意 vars...
+	sql, vars := generators[name](vars...)
+
+	c.sql[name] = sql
+	c.sqlVars[name] = vars
+}
+
+func (c *Clause) Build(orders ...Type) (string, []interface{}) {
+	// 依据 orders 构造完整的 SQL 语句
+	var sqls []string
+	var vars []interface{}
+	for _, order := range orders {
+		if sql, ok := c.sql[order]; ok {
+			sqls = append(sqls, sql)
+			vars = append(vars, c.sqlVars[order]...)
+		}
+	}
+	return strings.Join(sqls, " "), vars
+}
+~~~
+
+创建字句，以及构造完整的 SQL 语句的测试用例：
+
+~~~go
+package clause
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestGenBindVars(t *testing.T) {
+	result := genBindVars(3)
+	if result != "?, ?, ?" {
+		t.Fatalf("genBindVars error, got:(%s), want:(%s)", result, "?, ?, ?")
+	}
+}
+
+func TestClasue(t *testing.T) {
+	var clause Clause
+	clause.Set(LIMIT, 3)
+	clause.Set(SELECT, "User", []string{"*"})
+	clause.Set(WHERE, "Name=?", "Tom")
+	clause.Set(ORDERBY, "Age ASC")
+
+	sql, vars := clause.Build(SELECT, WHERE, ORDERBY, LIMIT)
+	// SELECT * FROM User WHERE Name=? ORDER BY Age ASC LIMIT ? [Tom 3]
+	t.Log(sql, vars)
+	if sql != "SELECT * FROM User WHERE Name=? ORDER BY Age ASC LIMIT ?" {
+		t.Fatal("failed to build SQL")
+	}
+	if !reflect.DeepEqual(vars, []interface{}{"Tom", 3}) {
+		t.Fatal("failed to build SQLVars")
+	}
+}
+
+func TestInsert(t *testing.T) {
+	var clause Clause
+	clause.Set(INSERT, "User", []string{"Name", "Age"})
+
+	sql, vars := clause.Build(INSERT)
+	t.Log(sql, vars)
+
+	if sql != "INSERT INTO User (Name,Age)" {
+		t.Fatal("failed to build SQL statement")
+	}
+}
+
+func TestValues(t *testing.T) {
+	var clause Clause
+
+	clause.Set(VALUES, []interface{}{"Tom", "18"}, []interface{}{"Sam", 29})
+	sql, vars := clause.Build(VALUES)
+	// VALUES (?, ?), (?, ?) [Tom 18 Sam 29]
+	t.Log(sql, vars)
+}
+~~~
+
+可以看出 VALUES 的参数是为多组参数准备的，比如上述测试用例中的 `{"Tom", "18"}` 和 `{"Sam", 29}`。
+
+实现 Insert 功能：
+
+~~~go
+func (s *Session) Insert(values ...interface{}) (int64, error) {
+	// INSERT INTO table_name(col1, col2, col3,...) VALUES (a1, a2, a3, ...), (b1, b2, b3, ...),...
+	recordValues := make([]interface{}, 0)
+	for _, value := range values {
+		table := s.Model(value).RefTable() // 执行 Parse
+		s.clause.Set(clause.INSERT, table.Name, table.FieldNames)
+        // 解析出对象中各个字段的值
+		recordValues = append(recordValues, table.RecordValues(value)) 
+	}
+
+	s.clause.Set(clause.VALUES, recordValues...)
+	sql, vars := s.clause.Build(clause.INSERT, clause.VALUES)
+
+	result, err := s.Raw(sql, vars...).Exec()
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+~~~
+
+最重要的一个步骤是：根据数据库中列的顺序，从对象中找到对应的值：
+
+~~~go
+func (schema *Schema) RecordValues(dest interface{}) []interface{} {
+	destValue := reflect.Indirect(reflect.ValueOf(dest)) // reflect.Value
+	var fieldValues []interface{}
+	for _, field := range schema.Fields {
+		// 顺序严格和 struct 定义中各个字段顺序一致
+		log.Infof("field.Name:%s", field.Name)
+		// reflect.Value struct --> value
+		fieldValues = append(fieldValues, destValue.FieldByName(field.Name).Interface())
+	}
+	return fieldValues
+}
+~~~
+
+在 ORM 角度来看，Insert 功能实际上就是将对象信息存储到 RDBMS 中；反之，对应的就是 Find 功能。
+
+~~~go
+~~~
+
+
+
+
+
+
+
+
 
 
 
@@ -549,13 +1273,27 @@ Exec success, 2 affected
 
 
 
+
+
+
+
 # 实现钩子 Hooks
 
 
 
 
 
+
+
+
+
 # 支持事务 Transaction
+
+
+
+
+
+
 
 
 
