@@ -20,7 +20,7 @@
 
 ~~~sql
 CREATE TABLE `User` (`Name` text, `Age` integer);
-INSERT INTO `User` (`Name`, `Age`) VALUES ("Tom", 18);
+INSERT INTO `User` (`Name`, `Age`) VALUES ("Tom", 18), ("Sam", 29), ("Katyusha", 18);
 SELECT * FROM `User`;
 ~~~
 
@@ -28,7 +28,7 @@ SELECT * FROM `User`;
 
 ~~~go
 type User struct {
-    Name string
+    Name string `geeorm:"PRIMARY KEY"`
     Age int
 }
 
@@ -54,7 +54,7 @@ type Account struct {
 }
 ~~~
 
-这就带来了一个很重要的问题：**如何根据任意类型的指针，得到其对应的结构体的信息**。这涉及到了 Go 语言的反射机制(reflect)，通过反射，可以获取到对象对应的结构体名称，成员变量、方法等信息，例如：
+这就带来了一个很重要的问题：**如何根据任意类型的指针，得到其对应的结构体的信息**。这涉及到了 Go 语言的**反射机制**(reflect)，通过反射，可以获取到对象对应的结构体名称，成员变量、方法等信息，例如：
 
 ~~~go
 typ := reflect.Indirect(reflect.ValueOf(&Account{})).Type() // 为什么要如此使用？
@@ -252,6 +252,10 @@ type Rows struct{ ... }
 type Stmt struct{ ... }
 type Tx struct{ ... }
 type TxOptions struct{ ... }
+
+ant@MacBook-Pro Go-examples-with-tests % go doc database/sql |grep "^type"|grep "interface"         
+type Result interface{ ... }
+type Scanner interface{ ... }
 ~~~
 
 下面来看一个简单的实例：
@@ -306,7 +310,7 @@ func main() {
 对上述程序使用到的 API 说明：
 
 - 使用 `sql.Open()` 连接数据库，第一个参数是驱动名称，import 语句 `_ "github.com/mattn/go-sqlite3"` 包导入时会**注册 sqlite3 的驱动**，第二个参数是**数据库的名称**，对于 SQLite 来说，也就是**文件名**，不存在会新建。返回一个 `sql.DB` 实例的指针。
-- `Exec()` 用于**执行 SQL 语句**，如果是查询语句，不会返回相关的记录。所以查询语句通常使用 `Query()` 和 `QueryRow()`，前者可以**返回多条记录**，后者**只返回一条记录**。
+- `Exec()` 用于**执行 SQL 语句**，其结果返回的是 `sql.Result` 实例。如果是查询语句，不会返回相关的记录，所以查询语句通常使用 `Query()` 和 `QueryRow()`，前者可以**返回多条记录**，后者**只返回一条记录**。
 - `Exec()`、`Query()`、`QueryRow()` 接受1或多个入参，第一个入参是 SQL 语句，后面的入参是 SQL 语句中的占位符 `?` 对应的值，占位符一般用来防 SQL 注入。
 - `QueryRow()` 的返回值类型是 `*sql.Row`，`row.Scan()` 接受1或多个指针作为参数，可以**获取对应列(column)的值**，在这个示例中，有 `Name` 和 `Age` 两列，因此传入字符串指针 `&name` 和 `&age` 即可获取到查询的结果。
 
@@ -399,11 +403,12 @@ func (s *Session) DB() *sql.DB {
 func (s *Session) Raw(sql string, values ...interface{}) *Session {
 	s.sql.WriteString(sql)
 	s.sql.WriteString(" ")
-	s.sqlVars = append(s.sqlVars, values...)
+    
+	s.sqlVars = append(s.sqlVars, values...) // 添加参数
 	return s
 }
 
-// Exec execs a SQL statement, and return sq.Result
+// Exec execs a SQL statement, and return sql.Result
 func (s *Session) Exec() (result sql.Result, err error) {
 	defer s.Clear()
 	log.Info(s.sql.String(), s.sqlVars)
@@ -417,7 +422,7 @@ func (s *Session) QueryRow() *sql.Row {
 	defer s.Clear()
     log.Info(s.sql.String(), s.sqlVars)
 	// 调用的是 sql.DB 的 QueryRow 函数，仅返回一行结果
-	return s.DB().QueryRow(s.sql.String(), s.sqlVars)
+	return s.DB().QueryRow(s.sql.String(), s.sqlVars...)
 }
 
 func (s *Session) QueryRows() (rows *sql.Rows, err error) {
@@ -425,7 +430,7 @@ func (s *Session) QueryRows() (rows *sql.Rows, err error) {
     log.Info(s.sql.String(), s.sqlVars)
 	// 调用的是 sql.DB 的 Query 函数，可返回多行结果
 	if rows, err = s.DB().Query(s.sql.String(), s.sqlVars...); err != nil {
-		log.Error(err)
+		log.Error(err) // 对返回值的判断，首先判断 error != nil
 	}
 	return
 }
@@ -742,17 +747,9 @@ func Parse(dest interface{}, d dialect.Dialect) *Schema {
 	}
 	return schema
 }
-
-func (schema *Schema) RecordValues(dest interface{}) []interface{} {
-	destValue := reflect.Indirect(reflect.ValueOf(dest)) // reflect.Value
-	var fieldValues []interface{}
-	for _, field := range schema.Fields {
-		// reflect.Value struct --> value
-		fieldValues = append(fieldValues, destValue.FieldByName(field.Name).Interface())
-	}
-	return fieldValues
-}
 ~~~
+
+因为设计的入参是一个对象的指针，因此需要 `reflect.Indirect()` 获取指针指向的实例。
 
 整个解析的过程使用的原理：Go reflect 机制。
 
@@ -780,24 +777,6 @@ func TestSchema(t *testing.T) {
 	}
 	if userSchema.fieldMap["Name"].Tag != "PRIMARY KEY" {
 		t.Fatal("schema parse User error")
-	}
-}
-
-func TestRecordValue(t *testing.T) {
-	user := &User{
-		Name: "Tom",
-		Age:  18,
-	}
-
-	dialect, _ := dialect.GetDialect("sqlite3")
-
-	schema := Parse(user, dialect)
-	values := schema.RecordValues(user)
-
-	name := values[0].(string)
-	age := values[1].(int)
-	if name != "Tom" && age != 18 {
-		t.Fatal("record value is error")
 	}
 }
 
@@ -845,7 +824,8 @@ func New(db *sql.DB, dialect dialect.Dialect) *Session {
 
 ~~~go
 func (s *Session) Model(value interface{}) *Session {
-	if s.refTable == nil || reflect.TypeOf(value) != reflect.TypeOf(s.refTable.Model) { // 指针值
+	if s.refTable == nil || reflect.TypeOf(value) != reflect.TypeOf(s.refTable.Model) {
+        // 触发执行 schema.Parse，解析结构体类型信息
 		s.refTable = schema.Parse(value, s.dialect)
 	}
 	return s
@@ -1017,7 +997,7 @@ SELECT col1, col2, ...
 	HAVING [condition];
 ~~~
 
-也就是说，如果想一次构造出完整的 SQL 语句是比较困难的，由此将构造 SQL 语句这一部分独立处理啊，放在新创建的子包 clause 中实现。也就是说，**实现各种子句的生成规则**：
+也就是说，如果想一次构造出完整的 SQL 语句是比较困难的，由此将构造 SQL 语句这一部分独立出来，放在新创建的子包 clause 中实现。也就是说，**实现各种子句的生成规则**：
 
 ~~~go
 package clause
@@ -1065,7 +1045,7 @@ func _values(values ...interface{}) (string, []interface{}) {
 
     // 构造成这样的形式：VALUES (?, ?), (?, ?), (?, ?)  [Katyusha 31 Sam 32 Jason 33]
 	for i, value := range values {
-		v := value.([]interface{})
+        v := value.([]interface{}) // 取出 []interface{} 中的一个值，比如 [Katyusha 31]
 		if bindStr == "" {
 			bindStr = genBindVars(len(v))
 		}
@@ -1096,11 +1076,13 @@ func _where(values ...interface{}) (string, []interface{}) {
 }
 
 func _orderBy(values ...interface{}) (string, []interface{}) {
-	// []interface{}指明是 interface{} 的数组类型：[]interface{}
-    // []interface{}{} 是 []interface{}类型的值
+	// []interface{}指明是interface{}的数组类型：[]interface{}
+    // []interface{}{}是一个[]interface{}类型的值
 	return fmt.Sprintf("ORDER BY %s", values[0]), []interface{}{} 
 }
 ~~~
+
+上面用于构造 SQL 子句的函数，返回对应的就是：SQL 字符串，以及对应的参数，比如 SQL 字符串中占位符对应的参数。
 
 紧接着的就是拼接各个字句，组成 SQL 语句：
 
@@ -1222,7 +1204,7 @@ func (s *Session) Insert(values ...interface{}) (int64, error) {
         // 解析出对象中各个字段的值
 		recordValues = append(recordValues, table.RecordValues(value)) 
 	}
-
+	// 填充所有的 recordValues，比如需要填充多个对象
 	s.clause.Set(clause.VALUES, recordValues...)
 	sql, vars := s.clause.Build(clause.INSERT, clause.VALUES)
 
@@ -1234,7 +1216,7 @@ func (s *Session) Insert(values ...interface{}) (int64, error) {
 }
 ~~~
 
-最重要的一个步骤是：根据数据库中列的顺序，从对象中找到对应的值：
+最重要的一个步骤是：**根据数据库中列的顺序，从对象中找到对应的值**，并**按照顺序平铺**
 
 ~~~go
 func (schema *Schema) RecordValues(dest interface{}) []interface{} {
@@ -1253,45 +1235,436 @@ func (schema *Schema) RecordValues(dest interface{}) []interface{} {
 在 ORM 角度来看，Insert 功能实际上就是将对象信息存储到 RDBMS 中；反之，对应的就是 Find 功能。
 
 ~~~go
+func (s *Session) Find(values interface{}) error {
+	// var users []User --> Find(&users)
+	destSlice := reflect.Indirect(reflect.ValueOf(values)) // reflect.Value --> []User
+	destType := destSlice.Type().Elem()                    // Array, Chan, Map, Ptr, or Slice reflect.Type --> User
+
+	// reflect.New(destType) --> reflect.Value
+	table := s.Model(reflect.New(destType).Elem().Interface()).RefTable()
+
+	s.clause.Set(clause.SELECT, table.Name, table.FieldNames)
+	sql, vars := s.clause.Build(clause.SELECT, clause.WHERE, clause.ORDERBY, clause.LIMIT)
+	rows, err := s.Raw(sql, vars...).QueryRows()
+	if err != nil {
+		return err
+	}
+
+	for rows.Next() {
+		dest := reflect.New(destType).Elem()
+		var values []interface{}
+		for _, name := range table.FieldNames {
+			// 向 values 中添加 dest 按序铺平的各个字段指针
+			values = append(values, dest.FieldByName(name).Addr().Interface())
+		}
+		// 依据数据库查询值，为 values 赋值
+		if err := rows.Scan(values...); err != nil {
+			return err
+		}
+		// 每次循环后，dest 添加到 destSlice 中，并修改 destSlice 的值用于下次循环
+		destSlice.Set(reflect.Append(destSlice, dest))
+	}
+	return rows.Close()
+}
 ~~~
 
+Find 的代码实现比较复杂，主要分为以下几步：
 
+- `destSlice.Type().Elem()` 获取切片的单个元素的类型 `destType`，使用 `reflect.New()` 方法创建一个 `destType` 的实例，作为 `Model()` 的入参，映射出表结构 `RefTable()`。
+- 根据表结构，使用 clause 构造出 SELECT 语句，查询到所有符合条件的记录 `rows`。
+- 遍历每一行记录，利用反射创建 `destType` 的实例 `dest`，将 `dest` 的所有字段平铺开，构造切片 `values`。
+- 调用 `rows.Scan()` 将该行记录每一列的值依次赋值给 values 中的每一个字段。
+- 将 `dest` 添加到切片 `destSlice` 中。循环直到所有的记录都添加到切片 `destSlice` 中。
 
-
-
-
-
-
-
-
-
-
+Find 的代码的实现，其原理运用到的是反射技术中修改：结构体变量、Slice 变量的值。
 
 # 链式操作与更新删除
 
+Update、Delete 和 Count 方法的实现和 Insert、Find 类似：
 
+定义子句生成器的类型：
 
+~~~go
+type Type int
 
+const (
+	INSERT Type = iota
+	VALUES
+	SELECT
+	LIMIT
+	WHERE
+	ORDERBY
+	UPDATE
+	DELETE
+	COUNT
+)
+~~~
 
+定义 update、delete 和 count 子句生成器，并实现注册：
 
+~~~go
+func init() {
+	generators = make(map[Type]generator)
 
+	generators[INSERT] = _insert
+	generators[VALUES] = _values
+	generators[SELECT] = _select
+	generators[LIMIT] = _limit
+	generators[WHERE] = _where
+	generators[ORDERBY] = _orderBy
+	generators[UPDATE] = _update
+	generators[DELETE] = _delete
+	generators[COUNT] = _count
+}
 
+func _update(values ...interface{}) (string, []interface{}) {
+	tableName := values[0]
+	m := values[1].(map[string]interface{})
+
+	var keys []string
+	var vars []interface{}
+	for k, v := range m {
+		keys = append(keys, k+" = ?")
+		vars = append(vars, v)
+	}
+	return fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(keys, ", ")), vars
+}
+
+func _delete(values ...interface{}) (string, []interface{}) {
+	return fmt.Sprintf("DELETE FROM %s", values[0]), []interface{}{}
+}
+
+func _count(values ...interface{}) (string, []interface{}) {
+	return _select(values[0], []string{"count(*)"})
+}
+~~~
+
+另外，特别要关注的是 SQL 的条件语句部分，比如 Limit、Where、OrderBy：
+
+~~~go
+func (s *Session) Limit(num int) *Session {
+	s.clause.Set(clause.LIMIT, num)
+	// 用于链式调用
+	return s
+}
+
+func (s *Session) Where(desc string, args ...interface{}) *Session {
+	var vars []interface{}
+	s.clause.Set(clause.WHERE, append(append(vars, desc), args...)...)
+	return s
+}
+
+func (s *Session) OrderBy(desc string) *Session {
+	s.clause.Set(clause.ORDERBY, desc)
+	return s
+}
+~~~
+
+这些部分实现了链式调用，也就是说，方法返回值仍然是 `*Session` 类型，可以接着继续调用其他方法：
+
+~~~go
+func (s *Session) Update(kv ...interface{}) (int64, error) {
+	// support map[string]interface{}
+	m, ok := kv[0].(map[string]interface{})
+	if !ok {
+		// also support: "Name", "Tom", "Age", 18
+		m = make(map[string]interface{})
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i].(string)] = kv[i+1]
+		}
+	}
+
+	s.clause.Set(clause.UPDATE, s.RefTable().Name, m)
+    // 附加上 clause.WHERE 子句
+	sql, vars := s.clause.Build(clause.UPDATE, clause.WHERE)
+	result, err := s.Raw(sql, vars...).Exec()
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *Session) Delete() (int64, error) {
+	s.clause.Set(clause.DELETE, s.RefTable().Name)
+    // 附加上 clause.WHERE 子句
+	sql, vars := s.clause.Build(clause.DELETE, clause.WHERE)
+	result, err := s.Raw(sql, vars...).Exec()
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *Session) Count() (int64, error) {
+	s.clause.Set(clause.COUNT, s.RefTable().Name)
+    // 附加上 clause.WHERE 子句
+	sql, vars := s.clause.Build(clause.COUNT, clause.WHERE)
+	row := s.Raw(sql, vars...).QueryRow()
+	var tmp int64
+	if err := row.Scan(&tmp); err != nil {
+		return 0, err
+	}
+	return tmp, nil
+}
+~~~
+
+测试代码：
+
+~~~go
+func TestUpdate(t *testing.T) {
+	session := New(TestDB, TestDialect)
+
+	session.Model(&User{})
+
+	if session.HasTable() {
+		session.DropTable()
+	}
+	session.CreateTable()
+
+	count, err := session.Insert(&User{
+		Name: "Tom",
+	})
+	if err != nil || count != 1 {
+		t.Fatal("insert error")
+	}
+
+	count, err = session.Where("Name = ?", "Tom").Update("Name", "Katyusha")
+	if err != nil || count != 1 {
+		t.Fatal("update error")
+	}
+}
+
+func TestCount(t *testing.T) {
+	session := New(TestDB, TestDialect)
+	session.Model(&User{})
+
+	count, err := session.Count()
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Infof("count=%d", count)
+}
+~~~
+
+很多时候，我们期望 SQL 语句只返回一条记录，比如根据某个童鞋的学号查询他的信息，返回结果有且只有一条。结合链式调用，我们可以非常容易地实现 First 方法。
+
+~~~go
+func (s *Session) First(value interface{}) error {
+	// var user &User --> session.First(user)
+	dest := reflect.Indirect(reflect.ValueOf(value))
+
+	destSlice := reflect.New(reflect.SliceOf(dest.Type())).Elem() // 创建 []User 值
+	if err := s.Limit(1).Find(destSlice.Addr().Interface()); err != nil {
+		return err
+	}
+	if destSlice.Len() == 0 {
+		return errors.New("NOT FOUND")
+	}
+	dest.Set(destSlice.Index(0))
+	return nil
+}
+~~~
+
+技术原理：根据传入的类型，利用反射构造切片，调用 `Limit(1)` 限制返回的行数，调用 `Find` 方法获取到查询结果。
 
 # 实现钩子 Hooks
 
+Hook 钩子，其主要思想是提前在**可能增加功能的地方**埋好（预设）一个**钩子**，当我们需要重新修改或者增加这个地方的逻辑的时候，把扩展的类或者方法**挂载**到**这个点**即可。
 
+钩子的应用非常广泛，例如 Github 支持的 travis 持续集成服务，当有 `git push` 事件发生时，会触发 travis 拉取新的代码进行构建。IDE 中钩子也非常常见，比如，当按下 `Ctrl + s` 后，自动格式化代码。再比如前端常用的 `hot reload` 机制，前端代码发生变更时，自动编译打包，通知浏览器自动刷新页面，实现所写即所得。
 
+比如，我们设计一个 `Account` 类，`Account` 包含有一个隐私字段 `Password`，那么每次查询后都需要做脱敏处理，才能继续使用。如果提供了 `AfterQuery` 的钩子，查询后，自动地将 `Password` 字段的值脱敏，是不是能省去很多冗余的代码呢？
 
+ORM 框架的钩子与结构体绑定，即每个结构体需要实现各自的钩子：
 
+~~~go
+package session
 
+import (
+	"reflect"
 
+	"github.com/go-examples-with-tests/database/v1/log"
+)
 
+const (
+	BeforeQuery = "BeforeQuery"
+	AfterQuery  = "AfterQuery"
+
+	BeforeUpdate = "BeforeUpdate"
+	AfterUpdate  = "AfterUpdate"
+
+	BeforeDelete = "BeforeDelete"
+	AfterDelete  = "AfterDelete"
+
+	BeforeInsert = "BeforeInsert"
+	AfterInsert  = "AfterInsert"
+)
+
+func (s *Session) CallHoookMethod(method string, value interface{}) {
+	fm := reflect.ValueOf(s.RefTable().Model).MethodByName(method)
+	if value != nil {
+		fm = reflect.ValueOf(value).MethodByName(method) // 什么情况下 value != nil
+	}
+
+	param := []reflect.Value{reflect.ValueOf(s)}
+	if fm.IsValid() {
+		// 每个钩子的入参都是 *Session
+		if v := fm.Call(param); len(v) > 0 {
+			if err, ok := v[0].Interface().(error); ok {
+				log.Error(err)
+			}
+		}
+	}
+}
+~~~
+
+其技术原理：Session 是和 Model 绑定在一起的，也就是可以拿到对应 Model 的钩子方法。拿到钩子方法后，就可调用该方法，从而实现 Hook 技术。
+
+接下来就要改造 Query、Update、Insert 和 Delete的实现：
+
+~~~go
+func (s *Session) Insert(values ...interface{}) (int64, error) {
+	// INSERT INTO table_name(col1, col2, col3,...) VALUES (a1, a2, a3, ...), (b1, b2, b3, ...),...
+	recordValues := make([]interface{}, 0)
+	for _, value := range values {
+        // 特别注意，此处传入了 value
+		s.CallHoookMethod(BeforeInsert, value)
+		table := s.Model(value).RefTable() // 执行 Parse
+		s.clause.Set(clause.INSERT, table.Name, table.FieldNames)
+		recordValues = append(recordValues, table.RecordValues(value)) // 解析出对象中各个字段的值
+	}
+
+	s.clause.Set(clause.VALUES, recordValues...)
+	sql, vars := s.clause.Build(clause.INSERT, clause.VALUES)
+
+	result, err := s.Raw(sql, vars...).Exec()
+	if err != nil {
+		return 0, err
+	}
+	s.CallHoookMethod(AfterInsert, nil)
+	return result.RowsAffected()
+}
+
+func (s *Session) Find(values interface{}) error {
+	s.CallHoookMethod(BeforeQuery, nil)
+	// var users []User --> Find(&users)
+	destSlice := reflect.Indirect(reflect.ValueOf(values)) // reflect.Value --> []User
+	destType := destSlice.Type().Elem()                    // Array, Chan, Map, Ptr, or Slice reflect.Type --> User
+
+	// reflect.New(destType) --> reflect.Value
+	log.Info(reflect.New(destType).Kind())
+	table := s.Model(reflect.New(destType).Interface()).RefTable()
+
+	s.clause.Set(clause.SELECT, table.Name, table.FieldNames)
+	sql, vars := s.clause.Build(clause.SELECT, clause.WHERE, clause.ORDERBY, clause.LIMIT)
+	rows, err := s.Raw(sql, vars...).QueryRows()
+	if err != nil {
+		return err
+	}
+
+	for rows.Next() {
+		dest := reflect.New(destType).Elem()
+		var values []interface{}
+		for _, name := range table.FieldNames {
+			// 向 values 中添加 dest 按序铺平的各个字段指针
+			values = append(values, dest.FieldByName(name).Addr().Interface())
+		}
+		// 依据数据库查询值，为 values 赋值
+		if err := rows.Scan(values...); err != nil {
+			return err
+		}
+        // 特别注意，此处出传入了的是一个指针值，可修改
+		s.CallHoookMethod(AfterQuery, dest.Addr().Interface())
+		destSlice.Set(reflect.Append(destSlice, dest))
+	}
+	return rows.Close()
+}
+
+func (s *Session) Update(kv ...interface{}) (int64, error) {
+	s.CallHoookMethod(BeforeQuery, nil)
+	// support map[string]interface{}
+	m, ok := kv[0].(map[string]interface{})
+	if !ok {
+		// also support: "Name", "Tom", "Age", 18
+		m = make(map[string]interface{})
+		for i := 0; i < len(kv); i += 2 {
+			m[kv[i].(string)] = kv[i+1]
+		}
+	}
+
+	s.clause.Set(clause.UPDATE, s.RefTable().Name, m)
+	sql, vars := s.clause.Build(clause.UPDATE, clause.WHERE)
+	result, err := s.Raw(sql, vars...).Exec()
+	if err != nil {
+		return 0, err
+	}
+	s.CallHoookMethod(AfterUpdate, nil)
+	return result.RowsAffected()
+}
+
+func (s *Session) Delete() (int64, error) {
+	s.CallHoookMethod(BeforeDelete, nil)
+	s.clause.Set(clause.DELETE, s.RefTable().Name)
+	sql, vars := s.clause.Build(clause.DELETE, clause.WHERE)
+	result, err := s.Raw(sql, vars...).Exec()
+	if err != nil {
+		return 0, err
+	}
+	s.CallHoookMethod(AfterDelete, nil)
+	return result.RowsAffected()
+}
+~~~
+
+测试：
+
+~~~go
+type Account struct {
+	ID       int `geeorm:PRIMARY KEY`
+	Password string
+}
+
+func (a *Account) BeforeInsert(s *Session) error {
+	log.Info("before insert ", a)
+	a.ID += 100
+	return nil
+}
+
+func (a *Account) AfterQuery(s *Session) error {
+	log.Info("after query:", a)
+	a.Password = "******"
+	return nil
+}
+
+func TestHook(t *testing.T) {
+	session := New(TestDB, TestDialect)
+
+	session.Model(&Account{})
+
+	if session.HasTable() {
+		session.DropTable()
+	}
+	session.CreateTable()
+
+	session.Insert(&Account{1, "123456"}, &Account{2, "qwerty"})
+
+	u := &Account{}
+	err := session.First(u)
+	if err != nil || u.ID != 101 || u.Password != "******" {
+		t.Fatal("Failed to call hooks after query, got:", u)
+	}
+}
+~~~
 
 # 支持事务 Transaction
 
+数据库事务 Transaction 是访问并可能操作各种数据项的**一个数据库操作序列**，这些操作要么**全部执行**，要么**全部不执行**，是**一个不可分割的工作单位**。事务由**事务开始**与**事务结束**之间执行的全部数据库操作组成。
 
+举一个简单的例子：转账。A 转账给 B 一万元，那么数据库至少需要执行 2 个操作：
 
+- 1）A 的账户减掉一万元。
+- 2）B 的账户增加一万元。
 
+这两个操作共同组成了一个事务。
 
 
 

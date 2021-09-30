@@ -1,3 +1,27 @@
+调用 reflect.ValueOf 函数可以返回一个 Value 实例，表示的是其动态值信息。如果返回的是零值，那么表示对应类型的零值：
+
+~~~go
+// ValueOf returns a new Value initialized to the concrete value
+// stored in the interface i. ValueOf(nil) returns the zero Value.
+func ValueOf(i interface{}) Value {
+	if i == nil {
+		return Value{}
+	}
+
+	// TODO: Maybe allow contents of a Value to live on the stack.
+	// For now we make the contents always escape to the heap. It
+	// makes life easier in a few places (see chanrecv/mapassign
+	// comment below).
+	escapes(i)
+
+	return unpackEface(i)
+}
+~~~
+
+和 Type 类型不同的是，Value 类型是一个结构体类型。同样的，为 Value 类型的实例定义了一系列的方法。
+
+不是所有 go 类型值的 Value 表示都能使用所有方法。请参见每个方法的文档获取使用限制。在调用有分类限定的方法时，应先使用 Kind 方法获知该值的分类。调用该分类不支持的方法会导致运行时的 panic。
+
 # 1 reflect.Value 的应用
 
 仍然使用**获取 struct 标签信息**这个应用实例作为引子：

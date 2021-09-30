@@ -1,3 +1,195 @@
+~~~go
+func TypeOf(i interface{}) Type
+~~~
+
+通过这个方法，获取到 i 的**动态类型信息**，也就是**一个 Type 实例**。当然 Type 本身是一个**接口**，定义了一系列的方法。
+
+Type 接口代表的是 Go 中的一个类型。Type 接口中定义的所有方法，并非适用于 Go 中可用的所有类型。在调用类型相关方法前，可使用 Kind 方法获知其类型种类信息。如果调用了和该类型种类不合适的方法，会导致 panic。
+
+Type 实例是可比较的，因此其可以作为 map 的 key。如果两个 Type 表示的是相同的 Go 类型，那么这两个 Type 实例就是相等的。
+
+**指针变量的实例**和**普通变量的实例**的使用：
+
+~~~go
+type Account struct {
+	username string
+	age      int8
+}
+
+func (account *Account) GetAge() {
+}
+
+func (account Account) GetUsername() {
+}
+
+func main() {
+	ptr := &Account{}
+	fmt.Printf("%T\n", ptr) // *main.Accountp ptr是一个指针类型的变量
+
+	typ := reflect.TypeOf(ptr)
+	fmt.Println(typ.Name(), typ.NumMethod(), typ.Kind())
+	// ValueOf returns a new Value initialized to the concrete value stored in the interface i.
+	value := reflect.ValueOf(ptr)
+    fmt.Println(value.Kind(), value.Type(), value.NumMethod())
+}
+
+*main.Account
+ 2 ptr
+ptr *main.Account 2
+~~~
+
+特别的，程序第 6 行，typ 是无法获取到 Name 信息的：`Name returns the type's name within its package for a defined type. For other (non-defined) types it returns the empty string.`
+
+相对的：
+
+~~~go
+func normalTest() {
+	obj := Account{}
+    fmt.Printf("%T\n", obj)
+    
+	value := reflect.ValueOf(obj)
+	fmt.Println(value.Kind(), value.Type().Name(), value.NumField(), value.NumMethod())
+
+	typ := value.Type()
+	fmt.Println(typ.Name(), typ.Kind(), typ.NumField(), typ.NumMethod())
+}
+
+main.Account
+struct Account 2 1
+Account struct 2 1
+~~~
+
+对于 `*main.Account` 类型来说，获取到的 `NumMethod()` 是 2 个；而对于 `main.Account` 类型来说，获取到的是 1 个。
+
+如果程序中拿到的是 `*main.Account`，如何获取对应的类型信息：
+
+~~~go
+func ptrIndirect() {
+	ptr := &Account{
+		username: "Katyusha",
+		age:      18,
+	}
+	typ := reflect.Indirect(reflect.ValueOf(ptr)).Type()
+	fmt.Println(typ.Name(), typ.NumField())
+
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		fmt.Println(field.Name, field.Tag)
+	}
+}
+
+Account 2
+username geekorm:"PRIMARY KEY"
+age 
+~~~
+
+`reflect.ValueOf(ptr)` 创建 `reflect.Value` 类型的值，`Value is the reflection interface to a Go value.`
+
+通过执行 `reflect.Indirect(reflect.Value)` 相当于是：`Indirect returns the value that v points to.` 执行了一次指针变量的**间接访问操作**，即通过指针（变量的地址）访问到了对应的变量，得到的结果类型是 `reflect.Value`。
+
+如果想通过一个 `reflect.Type` 构造出 `reflect.Value`：
+
+~~~go
+func reflectNew() {
+	ptr := Account{}
+
+	// start: reflect.Type，对应的是 mani.Account 类型
+	typ := reflect.TypeOf(ptr)
+
+	valuePtr := reflect.New(typ) // 其值对应的是 *main.Account 类型的值
+
+	// end: reflect.Value
+	value := reflect.Indirect(valuePtr) // 通过间接访问，即间接访问 *main.Account 变量
+	fmt.Println(value.Kind(), value.NumField(), value.NumMethod())
+}
+~~~
+
+间接使用：`New returns a Value representing a pointer to a new zero value for the specified type.`
+
+解析出一个结构体变量的各个字段值：
+
+~~~go
+type Account struct {
+	Username string `geekorm:"PRIMARY KEY"`
+	Age      int8
+}
+
+func recordValues() {
+	account := &Account{
+		Username: "Katyusha",
+		Age:      18,
+	}
+
+	// 获取 Fields 数组
+	typ := reflect.Indirect(reflect.ValueOf(&Account{})).Type()
+	fmt.Println(typ.NumField())
+
+	value := reflect.Indirect(reflect.ValueOf(account))
+	for i := 0; i < typ.NumField(); i++ {
+		// 依据 field.Name 获取对应的值，此次 Field 必须是可导出的
+		v := value.FieldByName(typ.Field(i).Name).Interface()
+		fmt.Printf("fieldName[%d]=%s, value:%v\n", i, typ.Field(i).Name, v)
+	}
+}
+~~~
+
+`value.FieldByName(typ.Field(i).Name)` 返回值类型是 `reflect.Value`，也就是对应结构体变量的对应字段的 `reflect.Value` 值。为了拿到这个值，还要作一次转换：`reflect.Value` 转化成 `interface{}`，使用的是 `Interface()` 方法：`Interface returns v's current value as an interface{}.` 相当于是：
+
+~~~go
+var i interface{} = (v's underlying value)
+~~~
+
+`reflect.Value` 和 `reflect.Type` 都有 `Elem()`，区别是什么：
+
+~~~go
+func elemAndInterface() {
+	var accounts []Account
+
+	var ptr interface{}
+	ptr = &accounts
+
+	destSlice := reflect.Indirect(reflect.ValueOf(ptr)) // reflect.Value []Acccount
+	destType := destSlice.Type().Elem()                 // Account
+	fmt.Println(destType.Name())
+
+	value := reflect.New(destType).Elem() // reflect.Value
+	value.Interface()                     // interface{}
+}
+~~~
+
+对于 `reflect.Type` 来说，`Elem()` 方法获取到的是 `Array, Chan, Map, Ptr, or Slice` 元素类型，返回值类型是 `reflect.Type`；对于 `reflect.Value` 来说，`Elem()` 方法是 `Elem returns the value that the interface v contains or that the pointer v points to.` 类似于获取其底层的值，而返回值类型是 `reflect.Value`。
+
+`reflect.Indirect` 函数的迷惑性：
+
+~~~go
+func indirect() {
+	account := Account{
+		Username: "Katyusha",
+		Age:      18,
+	}
+	value := reflect.Indirect(reflect.ValueOf(account))
+	fmt.Println(value.FieldByName("Username"))
+
+	fmt.Println(value.Type().Name())
+}
+~~~
+
+不过该函数的注释部分写得很明确：
+
+~~~go
+// Indirect returns the value that v points to.
+// If v is a nil pointer, Indirect returns a zero Value.
+// If v is not a pointer, Indirect returns v.
+func Indirect(v Value) Value {
+	if v.Kind() != Ptr {
+		return v
+	}
+	return v.Elem()
+}
+~~~
+
+
+
 # 1 结构体的标签信息
 
 在处理 json 格式字符串的时候，经常会看到声明 struct 结构的时候，字段属性的右侧还有一些描述信息。比如：

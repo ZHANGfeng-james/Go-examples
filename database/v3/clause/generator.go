@@ -3,8 +3,6 @@ package clause
 import (
 	"fmt"
 	"strings"
-
-	"github.com/go-examples-with-tests/database/v1/log"
 )
 
 type generator func(values ...interface{}) (string, []interface{})
@@ -20,6 +18,9 @@ func init() {
 	generators[LIMIT] = _limit
 	generators[WHERE] = _where
 	generators[ORDERBY] = _orderBy
+	generators[UPDATE] = _update
+	generators[DELETE] = _delete
+	generators[COUNT] = _count
 }
 
 func genBindVars(num int) string {
@@ -37,7 +38,6 @@ func _insert(values ...interface{}) (string, []interface{}) {
 }
 
 func _values(values ...interface{}) (string, []interface{}) {
-	log.Infof("len(values):%d", len(values))
 	var sql strings.Builder
 	sql.WriteString("VALUES ")
 
@@ -61,7 +61,6 @@ func _values(values ...interface{}) (string, []interface{}) {
 }
 
 func _select(values ...interface{}) (string, []interface{}) {
-	log.Infof("len(values):%d", len(values))
 	tableName := values[0]
 	// values[1] 是什么类型？按照 []string 类型转换
 	fields := strings.Join(values[1].([]string), ",")
@@ -81,4 +80,25 @@ func _where(values ...interface{}) (string, []interface{}) {
 func _orderBy(values ...interface{}) (string, []interface{}) {
 	// []interface{}指明是 interface{} 的数组类型：[]interface{}
 	return fmt.Sprintf("ORDER BY %s", values[0]), []interface{}{} // []interface{}{} 是 []interface{}类型的值
+}
+
+func _update(values ...interface{}) (string, []interface{}) {
+	tableName := values[0]
+	m := values[1].(map[string]interface{})
+
+	var keys []string
+	var vars []interface{}
+	for k, v := range m {
+		keys = append(keys, k+" = ?")
+		vars = append(vars, v)
+	}
+	return fmt.Sprintf("UPDATE %s SET %s", tableName, strings.Join(keys, ", ")), vars
+}
+
+func _delete(values ...interface{}) (string, []interface{}) {
+	return fmt.Sprintf("DELETE FROM %s", values[0]), []interface{}{}
+}
+
+func _count(values ...interface{}) (string, []interface{}) {
+	return _select(values[0], []string{"count(*)"})
 }

@@ -5,7 +5,6 @@ import (
 	"reflect"
 
 	"github.com/go-examples-with-tests/database/v2/dialect"
-	"github.com/go-examples-with-tests/database/v3/log"
 )
 
 // 一张 Table 中，Column 相关的信息
@@ -53,6 +52,7 @@ func Parse(dest interface{}, d dialect.Dialect) *Schema {
 				// reflect.Indirect(reflect.New(p.Type)) --> 创建指针类型实例，并访问
 				Type: d.DataTypeOf(reflect.Indirect(reflect.New(p.Type))),
 			}
+
 			if v, ok := p.Tag.Lookup("geeorm"); ok {
 				field.Tag = v
 			}
@@ -73,7 +73,6 @@ func (schema *Schema) RecordValues(dest interface{}) []interface{} {
 	var fieldValues []interface{}
 	for _, field := range schema.Fields {
 		// 顺序严格和 struct 定义中各个字段顺序一致
-		log.Infof("field.Name:%s", field.Name)
 		// reflect.Value struct --> value
 		fieldValues = append(fieldValues, destValue.FieldByName(field.Name).Interface())
 	}

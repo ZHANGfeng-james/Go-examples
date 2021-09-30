@@ -6,7 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/go-examples-with-tests/database/v2/dialect"
+	"github.com/go-examples-with-tests/database/v3/dialect"
+	"github.com/go-examples-with-tests/database/v3/log"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -96,5 +97,98 @@ func TestInsert(t *testing.T) {
 		if err != nil || count != 3 {
 			t.Fatal("insert action error")
 		}
+	}
+}
+
+func TestFind(t *testing.T) {
+	session := New(TestDB, TestDialect)
+	session.Model(&User{})
+
+	var users []User
+
+	if err := session.Find(&users); err != nil || len(users) != 2 {
+		t.Fatal("find error")
+	} else {
+		for i := 0; i < len(users); i++ {
+			fmt.Println(users[i])
+		}
+	}
+}
+
+func TestUpdate(t *testing.T) {
+	session := New(TestDB, TestDialect)
+
+	session.Model(&User{})
+
+	if session.HasTable() {
+		session.DropTable()
+	}
+	session.CreateTable()
+
+	count, err := session.Insert(&User{
+		Name: "Tom",
+	})
+	if err != nil || count != 1 {
+		t.Fatal("insert error")
+	}
+
+	count, err = session.Where("Name = ?", "Tom").Update("Name", "Katyusha")
+	if err != nil || count != 1 {
+		t.Fatal("update error")
+	}
+}
+
+func TestCount(t *testing.T) {
+	session := New(TestDB, TestDialect)
+	session.Model(&User{})
+
+	count, err := session.Count()
+	if err != nil {
+		t.Fatal(err)
+	}
+	log.Infof("count=%d", count)
+	if count == 1 {
+		user := &User{}
+		err := session.First(user)
+		if err != nil {
+			t.Fatal("first error")
+		}
+		log.Info(user.Name)
+	}
+}
+
+type Account struct {
+	ID       int `geeorm:PRIMARY KEY`
+	Password string
+}
+
+func (a *Account) BeforeInsert(s *Session) error {
+	log.Info("before insert ", a)
+	a.ID += 100
+	return nil
+}
+
+func (a *Account) AfterQuery(s *Session) error {
+	log.Info("after query:", a)
+	a.Password = "******"
+	return nil
+}
+
+func TestHook(t *testing.T) {
+	session := New(TestDB, TestDialect)
+
+	session.Model(&Account{})
+
+	if session.HasTable() {
+		session.DropTable()
+	}
+	session.CreateTable()
+
+	session.Insert(&Account{1, "123456"}, &Account{2, "qwerty"})
+
+	u := &Account{}
+	err := session.First(u)
+	if err != nil || u.ID != 101 || u.Password != "******" {
+		t.Fatal("Failed to call hooks after query, got:", u)
 	}
 }

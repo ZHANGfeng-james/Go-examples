@@ -1,6 +1,8 @@
 package clause
 
-import "strings"
+import (
+	"strings"
+)
 
 type Type int
 
@@ -11,6 +13,9 @@ const (
 	LIMIT
 	WHERE
 	ORDERBY
+	UPDATE
+	DELETE
+	COUNT
 )
 
 // 每一个 Clause 实例，就对应的是一个 SQL 语句
