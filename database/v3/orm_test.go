@@ -3,6 +3,8 @@ package orm
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/go-examples-with-tests/database/v2/log"
@@ -68,4 +70,47 @@ func TestTransaction(t *testing.T) {
 	if err == nil || s.HasTable() {
 		t.Fatal("failed to rollback")
 	}
+}
+
+func TestMigrate(t *testing.T) {
+	// 原先 Account 的字段是 ID 和 Password，现修改为：ID 和 SecretCode
+
+	// old: ID && Password
+	// new: ID && SecretCode
+
+	engine, err := NewEngine("sqlite3", "../gee.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	s := engine.NewSession()
+	_ = s.Model(&Account{}).DropTable()
+	_ = s.CreateTable()
+	count, err := s.Insert(&Account{
+		ID:       1,
+		Password: "123456",
+	})
+	if err != nil || count != 1 {
+		t.Fatal("insert error")
+	}
+
+	err = engine.Migrate(&Account_new{})
+	s = engine.NewSession()
+	s.Model(&Account_new{})
+
+	rows, _ := s.Raw(fmt.Sprintf("SELECT * FROM %s;", s.RefTable().Name)).QueryRows()
+	columns, _ := rows.Columns()
+	if !reflect.DeepEqual(columns, []string{"ID", "SecretCode"}) {
+		t.Fatal("Failed to migrate table User, got columns", columns)
+	}
+}
+
+type Account_new struct {
+	ID         int `geeorm:"PRIMARY KEY"`
+	SecretCode string
+}
+
+func (a *Account_new) TableName() string {
+	return "Account"
 }

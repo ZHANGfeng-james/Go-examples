@@ -526,7 +526,7 @@ Exec success, 2 affected
 [info ]2021/09/28 17:24:33 orm.go:34: Close database success
 ~~~
 
-# 对象表结构映射
+# 3 对象表结构映射
 
 对象表结构映射，解决的问题就是：**程序中的一个结构体指针（结构体）变量，转化为数据库中的一张表**。与之相关的，就是要获取到这个结构体指针（结构体）变量中各个字段的名称、类型和其他能够转化为表结构的约束信息。
 
@@ -985,7 +985,7 @@ func (engine *Engine) NewSession() *session.Session {
 2. 使用 reflect 实现了从结构体类型中获取字段名、类型、Tag，并转化为 Table；
 3. 实现创建 Table、删除 Table和判断 Table 是否存在的操作。
 
-# 记录新增和查询
+# 4 记录新增和查询
 
 查询语句一般由多个**字句（Clause）**构成：
 
@@ -1278,7 +1278,7 @@ Find 的代码实现比较复杂，主要分为以下几步：
 
 Find 的代码的实现，其原理运用到的是反射技术中修改：结构体变量、Slice 变量的值。
 
-# 链式操作与更新删除
+# 5 链式操作与更新删除
 
 Update、Delete 和 Count 方法的实现和 Insert、Find 类似：
 
@@ -1467,7 +1467,7 @@ func (s *Session) First(value interface{}) error {
 
 技术原理：根据传入的类型，利用反射构造切片，调用 `Limit(1)` 限制返回的行数，调用 `Find` 方法获取到查询结果。
 
-# 实现钩子 Hooks
+# 6 实现钩子 Hooks
 
 Hook 钩子，其主要思想是提前在**可能增加功能的地方**埋好（预设）一个**钩子**，当我们需要重新修改或者增加这个地方的逻辑的时候，把扩展的类或者方法**挂载**到**这个点**即可。
 
@@ -1655,7 +1655,7 @@ func TestHook(t *testing.T) {
 }
 ~~~
 
-# 支持事务 Transaction
+# 7 支持事务 Transaction
 
 数据库事务 Transaction 是访问并可能操作各种数据项的**一个数据库操作序列**，这些操作要么**全部执行**，要么**全部不执行**，是**一个不可分割的工作单位**。事务由**事务开始**与**事务结束**之间执行的全部数据库操作组成。
 
@@ -1831,7 +1831,7 @@ func TestTransaction(t *testing.T) {
 }
 ~~~
 
-# 数据库迁移 Migrate
+# 8 数据库迁移 Migrate
 
 数据库 Migrate 一直是数据库运维人员最为头痛的问题，如果仅仅是一张表增删字段还比较容易，那如果涉及到**外键**等复杂的**关联关系**，**数据库的迁移**就会变得非常困难。
 
@@ -1851,3 +1851,129 @@ ALTER TABLE new_table RENAME TO old_table;
 
 大致的逻辑就是：**从旧表中选出需要保留的列，删除旧表，重命名新建的表**。
 
+~~~go
+// difference get the difference of a - b
+func difference(a, b []string) (diff []string) {
+	mapD := make(map[string]bool)
+	for _, v := range b {
+		mapD[v] = true
+	}
+
+	for _, v := range a {
+		if _, ok := mapD[v]; !ok {
+			diff = append(diff, v)
+		}
+	}
+	return diff
+}
+
+func (engine *Engine) Migrate(value interface{}) error {
+	_, err := engine.Transaction(func(s *session.Session) (result interface{}, err error) {
+		// value interface{} --> new table with column changed
+		if !s.Model(value).HasTable() {
+			log.Infof("table %s doesn't exist", s.RefTable().Name)
+			return nil, s.CreateTable()
+		}
+
+		table := s.RefTable()
+		// 虽然此处 table 的 column 改变了，但是 table_name 没有改变
+		rows, _ := s.Raw(fmt.Sprintf("SELECT * FROM %s LIMIT 1;", table.Name)).QueryRows()
+		columns, _ := rows.Columns()
+		log.Infof("origin table columns:%v", columns)
+
+		addCols := difference(table.FieldNames, columns) // new - old = 在 new 中挑选 old 没有的
+		delCols := difference(columns, table.FieldNames) // old - new = 在 old 中挑选 new 没有的
+		log.Infof("added cols:%v, deleted cols:%s", addCols, delCols)
+
+		for _, col := range addCols {
+			field := table.GetField(col)
+			sqlStr := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s;", table.Name, field.Name, field.Type)
+			if _, err = s.Raw(sqlStr).Exec(); err != nil {
+				return
+			}
+		}
+
+		if len(delCols) == 0 {
+			return
+		}
+		tmp := "tmp_" + table.Name
+		fieldStr := strings.Join(table.FieldNames, ", ") // new columns
+		s.Raw(fmt.Sprintf("CREATE TABLE %s AS SELECT %s from %s;", tmp, fieldStr, table.Name))
+		s.Raw(fmt.Sprintf("DROP TABLE %s;", table.Name))
+		s.Raw(fmt.Sprintf("ALTER TABLE %s RENAME TO %s;", tmp, table.Name))
+
+		_, err = s.Exec()
+
+		return
+	})
+
+	return err
+}
+~~~
+
+测试：
+
+~~~go
+func TestMigrate(t *testing.T) {
+	// 原先 Account 的字段是 ID 和 Password，现修改为：ID 和 SecretCode
+
+	// old: ID && Password
+	// new: ID && SecretCode
+
+	engine, err := NewEngine("sqlite3", "../gee.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	s := engine.NewSession()
+	_ = s.Model(&Account{}).DropTable()
+	_ = s.CreateTable()
+	count, err := s.Insert(&Account{
+		ID:       1,
+		Password: "123456",
+	})
+	if err != nil || count != 1 {
+		t.Fatal("insert error")
+	}
+
+	err = engine.Migrate(&Account_new{})
+	s = engine.NewSession()
+	s.Model(&Account_new{})
+
+	rows, _ := s.Raw(fmt.Sprintf("SELECT * FROM %s;", s.RefTable().Name)).QueryRows()
+	columns, _ := rows.Columns()
+	if !reflect.DeepEqual(columns, []string{"ID", "SecretCode"}) {
+		t.Fatal("Failed to migrate table User, got columns", columns)
+	}
+}
+
+type Account_new struct {
+	ID         int `geeorm:"PRIMARY KEY"`
+	SecretCode string
+}
+
+func (a *Account_new) TableName() string {
+	return "Account"
+}
+~~~
+
+但是此处有一个问题：比如想要把 Password 列名修改为 SecretCode，上述 migrate 可以做到，但是对应列的数据却没有拷贝到目标表中。
+
+# 9 总结
+
+GeeORM 的整体实现比较粗糙，比如数据库的迁移仅仅考虑了最简单的场景。实现的特性也比较少，比如**结构体嵌套**的场景，**外键**的场景，**复合主键**的场景都没有覆盖。
+
+ORM 框架的代码规模一般都比较大，如果想尽可能地逼近数据库，就需要大量的代码来实现相关的特性；二是数据库之间的差异也是比较大的，实现的功能越多，数据库之间的差异就会越突出，有时候为了达到较好的性能，就不得不为每个数据做特殊处理；还有些 ORM 框架同时支持关系型数据库和非关系型数据库，这就要求框架本身有更高层次的抽象，不能局限在 SQL 这一层。
+
+GeeORM 仅 800 左右的代码是不可能做到这一点的。不过，GeeORM 的目的并不是实现一个可以在生产使用的 ORM 框架，而是希望尽可能多地介绍 ORM 框架大致的实现原理，例如
+
+- 在框架中如何屏蔽不同数据库之间的差异；
+- 数据库中表结构和编程语言中的对象是如何映射的；
+- 如何优雅地模拟查询条件，链式调用是个不错的选择；
+- 为什么 ORM 框架通常会提供 hooks 扩展的能力；
+- 事务的原理和 ORM 框架如何集成对事务的支持；
+- 一些难点问题，例如数据库迁移。
+- ...
+
+基于这几点，我觉得 GeeORM 的目的达到了。
