@@ -19,6 +19,14 @@ type Session struct {
 	refTable *schema.Schema
 
 	clause clause.Clause
+
+	transaction *sql.Tx
+}
+
+type CommonDB interface {
+	Query(query string, args ...interface{}) (*sql.Rows, error)
+	QueryRow(query string, args ...interface{}) *sql.Row
+	Exec(query string, args ...interface{}) (sql.Result, error)
 }
 
 func New(db *sql.DB, dialect dialect.Dialect) *Session {
@@ -34,7 +42,10 @@ func (s *Session) Clear() {
 	s.clause = clause.Clause{}
 }
 
-func (s *Session) DB() *sql.DB {
+func (s *Session) DB() CommonDB {
+	if s.transaction != nil {
+		return s.transaction
+	}
 	return s.db
 }
 

@@ -1664,14 +1664,190 @@ func TestHook(t *testing.T) {
 - 1）A 的账户减掉一万元。
 - 2）B 的账户增加一万元。
 
-这两个操作共同组成了一个事务。
+这两个操作共同组成了一个事务。这两个操作要么全部执行，代表转账成功。任意一个操作失败了，之前的操作都必须回退，代表转账失败。一个操作完成，另一个操作失败，这种结果是不能够接受的。**这种场景**就非常适合利用**数据库事务的特性**来解决。
 
+如果一个数据库支持事务，那么必须具备 ACID 四个属性。
 
+- **原子性**(Atomicity)：事务中的全部操作在数据库中是不可分割的，要么全部完成，要么全部不执行。
+- **一致性**(Consistency): 几个**并行执行**的事务，其执行结果必须与按某一顺序 串行执行的结果相一致。
+- **隔离性**(Isolation)：事务的执行**不受其他事务的干扰**，事务执行的中间结果对其他事务必须是**透明的**。（不好理解！）
+- **持久性**(Durability)：对于任意已提交事务，系统必须保证该事务对数据库的改变不被丢失，即使数据库出现故障。
 
+SQLite 中创建一个事务的原生 SQL 长什么样子呢？
 
+```sql
+sqlite> BEGIN;
+sqlite> DELETE FROM User WHERE Age > 25;
+sqlite> INSERT INTO User VALUES ("Tom", 25), ("Jack", 18);
+sqlite> COMMIT;
+```
 
+`BEGIN` **开启**事务，`COMMIT` **提交**事务，`ROLLBACK` **回滚**事务。任何一个事务，均以 `BEGIN` 开始，`COMMIT` 或 `ROLLBACK` 结束。来看看 Go 标准库是如何支持 SQL 事务的：
 
+~~~go
+func TestSQLTransaction(t *testing.T) {
+	db, _ := sql.Open("sqlite3", "../gee.db")
+	defer db.Close()
 
+	// CREATE TABLE Account (ID integer ,Password text );
+	_, _ = db.Exec("CREATE TABLE IF NOT EXISTS Account;")
 
+	tx, _ := db.Begin()
+	_, err1 := tx.Exec("INSERT INTO Account('ID', 'Password') VALUES (?, ?);", "1", "sdi")
+	_, err2 := tx.Exec("INSERT INTO Account('ID', 'Password') VALUES (?, ?);", "2", "sdy")
+	if err1 != nil || err2 != nil {
+		_ = tx.Rollback()
+		log.Info("Rollback", err1, err2)
+	} else {
+		_ = tx.Commit()
+		log.Info("Commit")
+	}
+}
+~~~
+
+比如，如果在执行第 10 行数据库操作时，出现异常，此时会 Rollback，而不会 Commit，也就是数据恢复到初始状态。
+
+让 ORM 具备 Transaction 特性：之前的 Session 使用的是 `*sql.DB` 和数据库交互，现在支持 Transaction，需要增加字段：`*sql.Tx`
+
+~~~go
+type Session struct {
+	db      *sql.DB         // 数据库实例，用于和数据库交互，执行 CRUD 操作
+	sql     strings.Builder // SQL 语句
+	sqlVars []interface{}   // SQL 语句中的 ? 占位符对应的参数
+
+	dialect  dialect.Dialect
+	refTable *schema.Schema
+
+	clause clause.Clause
+
+	transaction *sql.Tx
+}
+
+type CommonDB interface {
+	Query(query string, args ...interface{}) (*sql.Rows, error)
+	QueryRow(query string, args ...interface{}) *sql.Row
+	Exec(query string, args ...interface{}) (sql.Result, error)
+}
+
+func (s *Session) DB() CommonDB {
+	if s.transaction != nil {
+		return s.transaction
+	}
+	return s.db
+}
+~~~
+
+也就是说，一旦开启了 Transaction 功能，就需要为 `session.transaction` 赋值：
+
+~~~go
+package session
+
+import "github.com/go-examples-with-tests/database/v3/log"
+
+func (s *Session) Begin() (err error) {
+	log.Info("transactioin begin")
+	if s.transaction, err = s.db.Begin(); err != nil {
+		log.Error(err)
+		return
+	}
+	return
+}
+
+func (s *Session) Commit() (err error) {
+	log.Info("transaction commit")
+	if err = s.transaction.Commit(); err != nil {
+		log.Error(err)
+	}
+	return
+}
+
+func (s *Session) Rollback() (err error) {
+	log.Info("transaction rollback")
+	if err = s.transaction.Rollback(); err != nil {
+		log.Error(err)
+	}
+	return
+}
+~~~
+
+增加客户端可调用的 Transaction 能力：
+
+~~~go
+type TxFunc func(*session.Session) (interface{}, error)
+
+func (engine *Engine) Transaction(f TxFunc) (result interface{}, err error) {
+	session := engine.NewSession()
+	if err = session.Begin(); err != nil {
+		log.Error(err)
+		return nil, err
+	}
+
+	defer func() {
+		log.Info("Transaction run...")
+		if p := recover(); p != nil {
+			session.Rollback()
+			panic(p) // re-throw panic after Rollback
+		} else if err != nil {
+			log.Error(err.Error())
+			_ = session.Rollback() // err is non-nil; don't change it
+		} else {
+			err = session.Commit() // err is nil; if Commit returns error update err
+		}
+	}()
+	// 执行顺序：f(session) --> defer func(){}() 此时 err 变量已被 f(session) 赋值
+	return f(session)
+}
+~~~
+
+用户只需要将所有的操作放到一个回调函数中，作为入参传递给 `engine.Transaction()`，发生任何错误，自动回滚，如果没有错误发生，则提交。
+
+测试：
+
+~~~go
+type Account struct {
+	ID       int `geeorm:"PRIMARY KEY"`
+	Password string
+}
+
+func TestTransaction(t *testing.T) {
+	engine, err := NewEngine("sqlite3", "../gee.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	s := engine.NewSession()
+	_ = s.Model(&Account{}).DropTable()
+	_, err = engine.Transaction(func(s *session.Session) (interface{}, error) {
+		// 此处的入参是来自 engine.Transaction 方法中
+		_ = s.Model(&Account{}).CreateTable()
+		_, err = s.Insert(&Account{ID: 1, Password: "123456"})
+		// 此处故意返回一个 error 实例，以此触发 Rollback
+		return nil, errors.New("ERROR")
+	})
+	if err == nil || s.HasTable() {
+		t.Fatal("failed to rollback")
+	}
+}
+~~~
 
 # 数据库迁移 Migrate
+
+数据库 Migrate 一直是数据库运维人员最为头痛的问题，如果仅仅是一张表增删字段还比较容易，那如果涉及到**外键**等复杂的**关联关系**，**数据库的迁移**就会变得非常困难。
+
+在实现数据库迁移之前，先看看如何使用**原生的 SQL 语句**增删字段：
+
+~~~sql
+ALTER TABLE table_name ADD COLUMN col_name, col_type
+~~~
+
+大部分数据库**支持使用 ALTER 关键字新增字段，或者重命名字段**。但是，对于 SQLite 来说，**删除字段**并不像新增字段那么容易，一个比较可行的方法需要执行如下步骤：
+
+~~~sql
+CREATE TABLE new_table AS SELECT col1, col2, col3, ... FROM old_table;
+DROP TABLE old_table;
+ALTER TABLE new_table RENAME TO old_table;
+~~~
+
+大致的逻辑就是：**从旧表中选出需要保留的列，删除旧表，重命名新建的表**。
+

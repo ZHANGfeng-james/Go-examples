@@ -158,7 +158,7 @@ func TestCount(t *testing.T) {
 }
 
 type Account struct {
-	ID       int `geeorm:PRIMARY KEY`
+	ID       int `geeorm:"PRIMARY KEY"`
 	Password string
 }
 

@@ -3,7 +3,7 @@ package session
 import (
 	"reflect"
 
-	"github.com/go-examples-with-tests/database/v1/log"
+	"github.com/go-examples-with-tests/database/v3/log"
 )
 
 const (
