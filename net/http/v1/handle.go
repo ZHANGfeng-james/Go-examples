@@ -6,7 +6,7 @@ import (
 	"net/http"
 )
 
-func main() {
+func test() {
 	engine := &Engine{}
 	log.Fatal(http.ListenAndServe(":9999", engine))
 }
