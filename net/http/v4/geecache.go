@@ -10,6 +10,8 @@ type Group struct {
 	name      string
 	getter    Getter
 	mainCache cache //FIXME 此处为什么不能是 *cache？什么时候使用指针，什么时候使用普通类型？
+
+	picker PeerPicker
 }
 
 var (
@@ -67,9 +69,32 @@ func (g *Group) Get(key string) (ByteView, error) {
 	return g.load(key)
 }
 
-func (g *Group) load(key string) (ByteView, error) {
+func (g *Group) RegistePeers(picker PeerPicker) {
+	if g.picker != nil {
+		panic("RegistePeers called more than once")
+	}
+	g.picker = picker
+}
+
+func (g *Group) load(key string) (value ByteView, err error) {
+	if g.picker != nil {
+		if peer, ok := g.picker.PickPeer(key); ok {
+			if value, err = g.getFromPeer(peer, key); err == nil {
+				return value, nil
+			}
+			log.Println("[GeeCache] Failed to get from peer ", err)
+		}
+	}
 	// 调用 getter，用户自定义获取数据方式
 	return g.getLocally(key)
+}
+
+func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
+	cache, err := peer.Get(g.name, key)
+	if err != nil {
+		return ByteView{}, err
+	}
+	return ByteView{b: cloneBytes(cache)}, nil
 }
 
 func (g *Group) getLocally(key string) (ByteView, error) {
