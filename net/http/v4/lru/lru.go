@@ -42,7 +42,7 @@ func (c *Cache) Add(key string, value Value) {
 		c.nbytes += int64(len(key) + value.Len())
 	}
 	for c.maxBytes != 0 && c.nbytes > c.maxBytes {
-		c.RemoveOldest()
+		c.removeOldest()
 	}
 }
 
@@ -56,7 +56,7 @@ func (c *Cache) Get(key string) (value Value, ok bool) {
 	return
 }
 
-func (c *Cache) RemoveOldest() {
+func (c *Cache) removeOldest() {
 	ele := c.ll.Back()
 	if ele != nil {
 		kv := ele.Value.(*entry)
