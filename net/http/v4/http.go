@@ -19,7 +19,7 @@ const (
 // 作为通信的服务端，也就是接收客户端的 HTTP 缓存请求
 type HTTPPool struct {
 	self     string
-	basePath string
+	basePath string // API前缀，默认是 defaultBasePath
 
 	mu          sync.Mutex
 	peers       *consistenthash.Map    // hash(key) 选择 http://10.0.0.2:8008
@@ -94,10 +94,9 @@ func (p *HTTPPool) PickPeer(key string) (PeerGetter, bool) {
 	defer p.mu.Unlock()
 
 	peer := p.peers.Get(key)
-	log.Printf("get peer in peers: %v", peer)
-	//FIXME 此处为什么需要判断是否是 self？
+	log.Printf("get peer in peers: %v, p.self: %v", peer, p.self)
 	if peer != "" && peer != p.self {
-		p.Log("Pick peer %s", peer)
+		// peer != p.self 时，发起远端 HTTP 请求；如果是，则直接在本地请求
 		return p.httpGetters[peer], true
 	}
 	return nil, false

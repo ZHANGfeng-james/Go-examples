@@ -40,12 +40,13 @@ func main() {
 	if api {
 		go startAPIServer(apiAddr, gee)
 	}
+	// 默认选择 8001 端口作为主站启动，并可接收
 	startCacheServer(peerMap[port], addrs, gee)
 }
 
 func createGroup() *v4.Group {
 	return v4.NewGroup("scores", 2<<10, v4.GetterFunc(func(key string) ([]byte, error) {
-		// 从本地DB中取值
+		// 模拟从本地DB中取值
 		log.Println("[SlowDB] search key", key)
 		if v, ok := db[key]; ok {
 			return []byte(v), nil

@@ -16,6 +16,8 @@ type httpGetter struct {
 func (getter *httpGetter) Get(group string, key string) ([]byte, error) {
 	u := fmt.Sprintf("%v%v/%v",
 		getter.baseURL, url.QueryEscape(group), url.QueryEscape(key))
+
+	// http://localhost:8003/_geecache/scores/Katyusha
 	log.Printf("httpGetter send request to: %v", u)
 	// 依据指定的 URL 发出请求，等待 Server 响应并回传 cache value
 	response, err := http.Get(u)

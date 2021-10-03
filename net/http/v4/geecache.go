@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"sync"
+
+	"github.com/go-examples-with-tests/net/http/v4/singleflight"
 )
 
 type Group struct {
@@ -11,11 +13,14 @@ type Group struct {
 	getter    Getter
 	mainCache cache //FIXME 此处为什么不能是 *cache？什么时候使用指针，什么时候使用普通类型？
 
-	picker PeerPicker
+	picker       PeerPicker
+	singleflight *singleflight.Group
 }
 
 var (
-	mu     sync.RWMutex
+	mu sync.RWMutex
+
+	// 每一个进程中有多个命名不同的 Group
 	groups = make(map[string]*Group) //FIXME 此处为什么存的是 *Group？
 )
 
@@ -23,10 +28,10 @@ type Getter interface {
 	Get(key string) ([]byte, error)
 }
 
-type GetterFunc func(key string) ([]byte, error) // 接口型函数，实现了Getter接口
+type GetterFunc func(key string) ([]byte, error) // 接口型函数，即函数实现Getter接口
 
 func (f GetterFunc) Get(key string) ([]byte, error) {
-	return f(key)
+	return f(key) // 实质上，函数的声明和接口中定义的功能声明相同；实现接口方法时，调用了自身
 }
 
 func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
@@ -41,9 +46,10 @@ func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
 	mu.Lock()
 	defer mu.Unlock()
 	g := &Group{
-		name:      name,
-		getter:    getter,
-		mainCache: cache{cacheBytes: cacheBytes},
+		name:         name,
+		getter:       getter,
+		mainCache:    cache{cacheBytes: cacheBytes},
+		singleflight: &singleflight.Group{},
 	}
 	groups[name] = g
 	return g
@@ -77,16 +83,24 @@ func (g *Group) RegistePeers(picker PeerPicker) {
 }
 
 func (g *Group) load(key string) (value ByteView, err error) {
-	if g.picker != nil {
-		if peer, ok := g.picker.PickPeer(key); ok {
-			if value, err = g.getFromPeer(peer, key); err == nil {
-				return value, nil
+	// 不论是从远端获取还是本地获取，都仅做一次请求
+	view, err := g.singleflight.Do(key, func() (interface{}, error) {
+		if g.picker != nil {
+			if peer, ok := g.picker.PickPeer(key); ok {
+				if value, err = g.getFromPeer(peer, key); err == nil {
+					return value, nil
+				}
+				log.Println("[GeeCache] Failed to get from peer ", err)
 			}
-			log.Println("[GeeCache] Failed to get from peer ", err)
 		}
+		// 调用 getter，用户自定义获取数据方式
+		return g.getLocally(key)
+	})
+
+	if err == nil {
+		return view.(ByteView), nil
 	}
-	// 调用 getter，用户自定义获取数据方式
-	return g.getLocally(key)
+	return
 }
 
 func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
