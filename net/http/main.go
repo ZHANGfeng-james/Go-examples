@@ -75,7 +75,7 @@ func startAPIServer(apiAddr string, gee *v4.Group) {
 		}
 		rw.Header().Set("Content-Type", "application/octet-stream")
 		rw.Write(view.ByteSlice())
-		rw.Write([]byte("\r\n"))
+		//rw.Write([]byte("\r\n"))
 	}))
 	log.Println("fontend server is running at", apiAddr)
 	log.Fatal(http.ListenAndServe(apiAddr[7:], nil))

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/go-examples-with-tests/net/http/v4/cachepb"
 	"github.com/go-examples-with-tests/net/http/v4/consistenthash"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -62,12 +64,22 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// get cache value
 	view, err := group.Get(key)
 	if err != nil {
+		log.Println("group.Get(key):", err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// 通信数据的格式是 protobuf，编码
+	body, err := proto.Marshal(&cachepb.Response{Value: view.ByteSlice()})
+	if err != nil {
+		log.Println("proto.Marshal:", err.Error())
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Write(view.ByteSlice())
-	w.Write([]byte("\r\n"))
+	w.Write(body)
+	// w.Write([]byte("\r\n"))
 }
 
 func (p *HTTPPool) Set(peers ...string) {

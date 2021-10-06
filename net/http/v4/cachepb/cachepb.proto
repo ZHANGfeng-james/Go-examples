@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package cachepb;
 
+option go_package="../cachepb"; // 指定 cachepb.pb.go 文件生成的目录路径
+
 message Request {
     string group = 1;
     string key = 2;

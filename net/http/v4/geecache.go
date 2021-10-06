@@ -5,6 +5,7 @@ import (
 	"log"
 	"sync"
 
+	"github.com/go-examples-with-tests/net/http/v4/cachepb"
 	"github.com/go-examples-with-tests/net/http/v4/singleflight"
 )
 
@@ -104,11 +105,17 @@ func (g *Group) load(key string) (value ByteView, err error) {
 }
 
 func (g *Group) getFromPeer(peer PeerGetter, key string) (ByteView, error) {
-	cache, err := peer.Get(g.name, key)
+	req := &cachepb.Request{
+		Group: g.name,
+		Key:   key,
+	}
+	log.Printf("g.name:%s, key:%s", g.name, key)
+	response := &cachepb.Response{}
+	err := peer.Get(req, response)
 	if err != nil {
 		return ByteView{}, err
 	}
-	return ByteView{b: cloneBytes(cache)}, nil
+	return ByteView{b: cloneBytes(response.Value)}, nil
 }
 
 func (g *Group) getLocally(key string) (ByteView, error) {
