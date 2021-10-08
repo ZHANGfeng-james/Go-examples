@@ -29,6 +29,7 @@ func (gob *GobCodec) ReadHeader(h *Header) error {
 }
 
 func (gob *GobCodec) ReadBody(body interface{}) error {
+	// gob: type mismatch in decoder: want struct type main.Args; got non-struct
 	return gob.dec.Decode(body)
 }
 
