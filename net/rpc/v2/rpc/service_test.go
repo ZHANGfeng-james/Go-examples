@@ -9,17 +9,17 @@ import (
 type Foo int
 
 type Args struct {
-	num1 int
-	num2 int
+	Num1 int
+	Num2 int
 }
 
 func (f Foo) Sum(args Args, reply *int) error {
-	*reply = args.num1 + args.num2
+	*reply = args.Num1 + args.Num2
 	return nil
 }
 
 func (f Foo) sum(args Args, reply *int) error {
-	*reply = args.num1 + args.num2
+	*reply = args.Num1 + args.Num2
 	return nil
 }
 
@@ -46,7 +46,7 @@ func TestMethodType_Call(t *testing.T) {
 
 	argv := mType.newArgv()
 	replyv := mType.newReplyv()
-	argv.Set(reflect.ValueOf(Args{num1: 1, num2: 3}))
+	argv.Set(reflect.ValueOf(Args{Num1: 1, Num2: 3}))
 	err := s.call(mType, argv, replyv)
 
 	_assert(err == nil && *replyv.Interface().(*int) == 4 && mType.numCalls == 1, "failed to call Foo.Sum")

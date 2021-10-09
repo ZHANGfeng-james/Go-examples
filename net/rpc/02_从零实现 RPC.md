@@ -1265,25 +1265,299 @@ func main() {
 
 纵观整个远程调用的过程，**需要客户端处理超时**的地方有：与服务端建立连接；发送请求到服务端，写报文时；等待服务端处理，等待处理，而服务端因为某些原因已宕机，无法响应；从服务端接收响应结果，读报文。**需要服务端处理超时**的地方有：读取客户端请求报文；调用映射服务的方法，处理报文导致超时异常；发送响应报文，写报文导致超时。
 
+**「客户端处理连接超时」**：
 
+~~~go
+package rpc
 
+import (
+	"time"
 
+	"github.com/go-examples-with-tests/net/rpc/v2/codec"
+)
 
+const MagicNumber = 0x3bef5c
 
+type Option struct {
+	MagicNumber int        // 标记这是 geerpc 的 request
+	CodecType   codec.Type // client 还可使用其他的 codec 用于编码 body 部分
 
+	ConnectionTimeout time.Duration
+	HandleTimeout     time.Duration
+}
 
+var DefaultOption = &Option{
+	MagicNumber:       MagicNumber,
+	CodecType:         codec.GobType, // 默认情况下，RPC 服务端使用 gob codec 解码
+	ConnectionTimeout: 3 * time.Second,
+}
+~~~
 
+为 Option 新增字段：ConnectionTimeout，默认是 3 s。
 
+~~~go
+func Dial(network, address string, opts ...*Option) (client *Client, err error) {
+	return dialTimeout(NewClient, network, address, opts...)
+}
 
+type newClientFunc func(conn net.Conn, opt *Option) (*Client, error)
 
+func dialTimeout(f newClientFunc, network, address string, opts ...*Option) (client *Client, err error) {
+	opt, err := parseOptions(opts...)
+	if err != nil {
+		return nil, err
+	}
+	// 在 Client 中封装 net.Dial
+	log.Println("start to dial...")
+	conn, err := net.DialTimeout(network, address, opt.ConnectionTimeout)
+	if err != nil {
+		return nil, err
+	}
+	// Dial --> NewClient --> newClient --> client.receive() 此处的 defer 在最后执行
+	defer func() {
+		if err != nil {
+			_ = conn.Close()
+		}
+	}()
 
+	ch := make(chan clientResult)
+	go func() {
+		client, err := f(conn, opt)
+		// time.Sleep(6 * time.Second) 此处模拟网络超时
+		ch <- clientResult{
+			client: client,
+			err:    err,
+		}
+	}()
+	if opt.ConnectionTimeout == 0 {
+		result := <-ch
+		return result.client, result.err
+	}
 
+	log.Println("begin to time count...")
+	select {
+	case <-time.After(opt.ConnectionTimeout):
+		return nil, fmt.Errorf("rpc client: connect server timeout, expect with %s", opt.ConnectionTimeout)
+	case result := <-ch:
+		return result.client, result.err
+	}
+}
 
+type clientResult struct {
+	client *Client
+	err    error
+}
+~~~
 
+修改原先 Dial 函数，新增 dialTimeout 函数，在其中实现连接超时控制。连接超时控制的实现有如下步骤：
 
+1. `net.DialTimeout`：连接函数调用时，附带上超时时间；
+2. 使用 time.After，如果在超时时间内 ch 获取 clientResult，说明未超时。
 
+「Client.Call 的**超时机制**」将控制权交给用户：
+
+~~~go
+...
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			args := &Args{Num1: i, Num2: i * i}
+			var reply int
+			if err := client.Call(ctx, "Foo.Sum", args, &reply); err != nil {
+				log.Fatal("call Foo.Sum error:", err)
+			}
+			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
+		}(i)
+	}
+...
+~~~
+
+对应的实现：
+
+~~~go
+func (client *Client) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
+	// 同步调用，持续阻塞(<- channel)
+	call := client.Go(serviceMethod, args, reply, make(chan *Call, 1))
+	select {
+	case <-ctx.Done():
+		client.removeCall(call.Seq)
+		return errors.New("rpc client: call failed, " + ctx.Err().Error())
+	case call := <-call.Done: // 用于接收 call.Error
+		return call.Error
+	}
+}
+~~~
+
+**「服务器端超时处理」**:
+
+~~~go
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup, handleTimeout time.Duration) {
+	defer wg.Done()
+
+	called := make(chan struct{})
+	sent := make(chan struct{})
+
+	// 如果超时，则此处会导致 goroutine 泄漏
+	go func() {
+		err := req.svc.call(req.mtype, req.argv, req.replyv)
+		called <- struct{}{}
+		if err != nil {
+			req.h.Error = err.Error()
+			server.sendResponse(cc, req.h, invalidRequest, sending)
+			sent <- struct{}{}
+			return
+		}
+		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+		sent <- struct{}{}
+	}()
+
+	if handleTimeout == 0 { // 不做超时控制
+		<-called
+		<-sent
+		return
+	}
+
+	select {
+	case <-time.After(handleTimeout):
+		req.h.Error = fmt.Sprintf("rpc server: request handle timeout, expect within:%s", handleTimeout)
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+	case <-called:
+		<-sent
+	}
+}
+~~~
+
+这里需要确保 `sendResponse` 仅调用一次，因此将整个过程拆分为 `called` 和 `sent` 两个阶段，在这段代码中只会发生如下两种情况：sere
+
+1) called 信道接收到消息，代表处理没有超时，继续执行 sendResponse。
+2) `time.After()` 先于 called 接收到消息，说明处理已经超时，called 和 sent 都将被阻塞。在 `case <-time.After(timeout)` 处调用 `sendResponse`。
+
+但此处有一个问题，如果超时，那么在其中的 **goroutine 会导致泄漏**！
+
+测试程序：
+
+~~~go
+package rpc
+
+import (
+	"context"
+	"log"
+	"net"
+	"testing"
+	"time"
+)
+
+type Bar int
+
+func (bar *Bar) Timeout(argv int, replyv *int) error {
+	log.Println("Bar timeout run")
+	time.Sleep(2 * time.Second)
+	return nil
+}
+
+func startServer(addr chan string) {
+	var bar Bar
+	if err := Register(&bar); err != nil {
+		log.Fatal("register error:", err)
+	}
+
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		log.Fatal("network error:", err)
+	}
+	log.Println("start rpc server on", l.Addr())
+	addr <- l.Addr().String()
+
+	log.Println(l.Addr().String())
+
+	Accept(l) // 接收 net.Listener
+}
+
+func TestClientCall(t *testing.T) {
+	t.Parallel()
+
+	addrCh := make(chan string)
+	go startServer(addrCh)
+
+	addr := <-addrCh
+	time.Sleep(3 * time.Second)
+	t.Run("client timeout control", func(t *testing.T) {
+		client, err := Dial("tcp", addr)
+		if client == nil {
+			log.Println(err)
+			return
+		}
+
+		log.Println("client is normal")
+
+		defer func() {
+			// 原先是 net.Conn
+			_ = client.Close()
+		}()
+
+		// 用户需要在 1s 内拿到服务端的响应结果
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		var reply int
+		err = client.Call(ctx, "Bar.Timeout", 1, &reply)
+		if err != nil {
+			log.Println("err:", err)
+		}
+	})
+
+	t.Run("server timeout handle", func(t *testing.T) {
+		// 设定 Server 必须在 1 秒内处理结果，否则超时
+		client, err := Dial("tcp", addr, &Option{
+			HandleTimeout: time.Second,
+		})
+		if client == nil {
+			log.Println(err)
+			return
+		}
+
+		log.Println("client is normal")
+
+		defer func() {
+			// 原先是 net.Conn
+			_ = client.Close()
+		}()
+
+		var reply int
+		err = client.Call(context.Background(), "Bar.Timeout", 1, &reply)
+		if err != nil {
+			log.Println("err:", err)
+		}
+	})
+}
+~~~
 
 # 5 支持 HTTP 协议
+
+Web 开发中，我们经常使用 HTTP 协议中的 HEAD/GET/POST 等方式发送请求，等待响应。但**本文所实现的 RPC 的消息格式**与**标准的 HTTP 协议**并不兼容，在这种情况下，就需要**一个协议的转换过程**。HTTP 协议的 **CONNECT 方法**恰好提供了这个能力，CONNECT 一般用于**代理服务**。
+
+假设**浏览器**与**服务器**之间的 HTTPS 通信都是**加密的**，浏览器通过**代理服务器**发起 HTTPS 请求时，由于请求的站点地址和端口号都是加密保存在 HTTPS 请求报文头中的，代理服务器如何知道往哪里发送请求呢？为了解决这个问题，可进行如下步骤：
+
+1. 浏览器通过 HTTP **明文形式**向代理服务器发送**一个 CONNECT 请求**告诉代理服务器**目标地址和端口**；
+2. 代理服务器接收到这个请求后，会在对应端口与目标站点**建立一个 TCP 连接**，连接建立成功后返回 HTTP 200 状态码告诉浏览器与该站点的加密通道已经完成；
+3. 之后浏览器和服务器开始 HTTPS 握手并交换加密数据，代理服务器**仅需透传浏览器和服务器之间的加密数据包**即可，代理服务器无需解析 HTTPS 报文。
+
+事实上，这个过程其实是通过代理服务器将 HTTP 协议转换为 HTTPS 协议的过程。对于 RPC 服务端来说，需要做的是将 HTTP 协议转换为 RPC 协议；对于客户端来说，需要新增通过 HTTP CONNECT 请求创建连接的逻辑。
+
+**「服务端支持HTTP协议」**
+
+整个通讯过程：
+
+1. 客户端向 RPC 服务器发送 CONNECT 请求；
+2. RPC 服务器返回 HTTP 200 状态码表示连接建立成功；
+3. 客户端使用创建好的连接（net.Conn）发送 RPC 报文，先发送 Option，再发送请求报文。服务端处理 RPC 请求并响应。
+
+
 
 
 

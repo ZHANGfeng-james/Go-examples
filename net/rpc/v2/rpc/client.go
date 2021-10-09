@@ -1,12 +1,17 @@
 package rpc
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"net/http"
 	"sync"
+	"time"
 
 	"github.com/go-examples-with-tests/net/rpc/v2/codec"
 )
@@ -27,21 +32,72 @@ func (call *Call) done() {
 var ErrShutdown = errors.New("connection is shut down")
 
 func Dial(network, address string, opts ...*Option) (client *Client, err error) {
+	return dialTimeout(NewClient, network, address, opts...)
+}
+
+func DialHTTP(network, address string, opts ...*Option) (client *Client, err error) {
+	return dialTimeout(NewClientHTTP, network, address, opts...)
+}
+
+func NewClientHTTP(conn net.Conn, opt *Option) (*Client, error) {
+	Info("NewClientHTTP write to net.Conn")
+	_, _ = io.WriteString(conn, fmt.Sprintf("CONNECT %s HTTP/1.0\n\n", defaultRPCPath))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
+	Info("resp.Status:%s", resp.Status)
+	if err == nil && resp.Status == connected {
+		return NewClient(conn, opt)
+	}
+	if err == nil {
+		err = errors.New("unexpected HTTP status:" + resp.Status)
+	}
+	return nil, err
+}
+
+type newClientFunc func(conn net.Conn, opt *Option) (*Client, error)
+
+func dialTimeout(f newClientFunc, network, address string, opts ...*Option) (client *Client, err error) {
 	opt, err := parseOptions(opts...)
 	if err != nil {
 		return nil, err
 	}
 	// 在 Client 中封装 net.Dial
-	conn, err := net.Dial(network, address)
+	conn, err := net.DialTimeout(network, address, opt.ConnectionTimeout)
 	if err != nil {
+		Info("net.DialTimeout:", err)
 		return nil, err
 	}
+	// Dial --> NewClient --> newClient --> client.receive() 此处的 defer 在最后执行
 	defer func() {
 		if err != nil {
 			_ = conn.Close()
 		}
 	}()
-	return NewClient(conn, opt)
+
+	ch := make(chan clientResult)
+	go func() {
+		client, err := f(conn, opt)
+		ch <- clientResult{
+			client: client,
+			err:    err,
+		}
+	}()
+	if opt.ConnectionTimeout == 0 {
+		result := <-ch
+		return result.client, result.err
+	}
+
+	select {
+	case <-time.After(opt.ConnectionTimeout):
+		Info("timeout")
+		return nil, fmt.Errorf("rpc client: connect server timeout, expect with %s", opt.ConnectionTimeout)
+	case result := <-ch:
+		return result.client, result.err
+	}
+}
+
+type clientResult struct {
+	client *Client
+	err    error
 }
 
 func parseOptions(opts ...*Option) (*Option, error) {
@@ -63,13 +119,13 @@ func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 	f := codec.NewCodecFuncMap[opt.CodecType]
 	if f == nil {
 		err := fmt.Errorf("invalid codec type %s", opt.CodecType)
-		log.Println("rpc client: codec error:", err)
+		Info("rpc client: codec error:", err)
 		return nil, err
 	}
 	// Client 发送给 Server 的格式：| Option | Header1 | Body1 | Header2 | Body2 |...
 	// 也就是让 Server 知道 Client 当前的协议格式，一种协商措施
 	if err := json.NewEncoder(conn).Encode(opt); err != nil {
-		log.Println("rpc client: options error:", err)
+		Info("rpc client: options error:", err)
 		_ = conn.Close()
 		return nil, err
 	}
@@ -161,10 +217,16 @@ func (client *Client) terminateCalls(err error) {
 	}
 }
 
-func (client *Client) Call(serviceMethod string, args, reply interface{}) error {
+func (client *Client) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
 	// 同步调用，持续阻塞(<- channel)
-	call := <-client.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
-	return call.Error
+	call := client.Go(serviceMethod, args, reply, make(chan *Call, 1))
+	select {
+	case <-ctx.Done():
+		client.removeCall(call.Seq)
+		return errors.New("rpc client: call failed, " + ctx.Err().Error())
+	case call := <-call.Done: // 用于接收 call.Error
+		return call.Error
+	}
 }
 
 func (client *Client) Go(serviceMethod string, args, reply interface{}, done chan *Call) *Call {

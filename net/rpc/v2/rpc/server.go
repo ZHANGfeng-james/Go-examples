@@ -3,27 +3,18 @@ package rpc
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-examples-with-tests/net/rpc/v2/codec"
 )
-
-const MagicNumber = 0x3bef5c
-
-type Option struct {
-	MagicNumber int        // 标记这是 geerpc 的 request
-	CodecType   codec.Type // client 还可使用其他的 codec 用于编码 body 部分
-}
-
-var DefaultOption = &Option{
-	MagicNumber: MagicNumber,
-	CodecType:   codec.GobType, // 默认情况下，RPC 服务端使用 gob codec 解码
-}
 
 type Server struct {
 	serviceMap sync.Map
@@ -55,6 +46,7 @@ func (server *Server) findService(serviceMethod string) (svc *service, mtype *me
 	}
 	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
 	svic, ok := server.serviceMap.Load(serviceName)
+
 	if !ok {
 		err = errors.New("rpc server: can not find service " + methodName)
 		return
@@ -71,7 +63,7 @@ func (server *Server) Accept(lis net.Listener) {
 	for {
 		conn, err := lis.Accept() // net.Listener --> Accept() --> net.Conn
 		if err != nil {
-			log.Println("rpc server: accept error, ", err)
+			Info("rpc server: accept error, ", err)
 			return
 		}
 		go server.ServeConn(conn)
@@ -93,19 +85,19 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 	// option 方面使用 JSON 格式编码，最先解析的是 json 格式的 Option
 	//FIXME json.NewDecoder(conn).Decode(&opt) 的工作原理？
 	if err := json.NewDecoder(conn).Decode(&opt); err != nil {
-		log.Println("rpc server: Options error, ", err)
+		Info("rpc server: Options error, ", err)
 		return
 	}
 	if opt.MagicNumber != MagicNumber {
-		log.Printf("rpc server: invalid magic number %x", opt.MagicNumber)
+		Info("rpc server: invalid magic number %x", opt.MagicNumber)
 		return
 	}
 	f := codec.NewCodecFuncMap[opt.CodecType]
 	if f == nil {
-		log.Printf("rpc server: invalid codec type %s", opt.CodecType)
+		Info("rpc server: invalid codec type %s", opt.CodecType)
 		return
 	}
-	server.serveCodec(f(conn))
+	server.serveCodec(f(conn), &opt)
 }
 
 var invalidRequest = struct{}{}
@@ -120,7 +112,7 @@ type request struct {
 }
 
 // f(conn) 得到的是一个 codec.Codec 编解码器
-func (server *Server) serveCodec(cc codec.Codec) {
+func (server *Server) serveCodec(cc codec.Codec, opt *Option) {
 	// 注意，此处使用的是 *sync.Mutex 和 *sync.WaitGroup
 	sending := new(sync.Mutex)
 	wg := new(sync.WaitGroup)
@@ -139,7 +131,7 @@ func (server *Server) serveCodec(cc codec.Codec) {
 		}
 		wg.Add(1)
 		// 处理请求
-		go server.handleRequest(cc, req, sending, wg)
+		go server.handleRequest(cc, req, sending, wg, opt.HandleTimeout)
 	}
 	wg.Wait()
 	_ = cc.Close()
@@ -149,7 +141,7 @@ func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 	var h codec.Header
 	if err := cc.ReadHeader(&h); err != nil {
 		if err != io.EOF && err != io.ErrUnexpectedEOF {
-			log.Println("rpc server: read header error: ", err)
+			Info("rpc server: read header error: ", err)
 		}
 		return nil, err
 	}
@@ -181,7 +173,7 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 	// 字节流反序列化成变量值
 	if err = cc.ReadBody(argvi); err != nil {
 		// gob: type mismatch in decoder: want struct type main.Args; got non-struct
-		log.Println("rpc server: read body err:", err)
+		Info("rpc server: read body err:", err)
 		return req, err
 	}
 
@@ -192,18 +184,77 @@ func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interfa
 	sending.Lock()
 	defer sending.Unlock()
 	if err := cc.Write(h, body); err != nil {
-		log.Println("rpc server: write response error:", err)
+		Info("rpc server: write response error:", err)
 	}
 }
 
-func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup, handleTimeout time.Duration) {
 	defer wg.Done()
 
-	err := req.svc.call(req.mtype, req.argv, req.replyv)
-	if err != nil {
-		req.h.Error = err.Error()
-		server.sendResponse(cc, req.h, invalidRequest, sending)
+	called := make(chan struct{})
+	sent := make(chan struct{})
+
+	// 如果超时，则此处会导致 goroutine 泄漏
+	go func() {
+		time.Sleep(3 * time.Second)
+		err := req.svc.call(req.mtype, req.argv, req.replyv)
+		called <- struct{}{}
+		if err != nil {
+			req.h.Error = err.Error()
+			server.sendResponse(cc, req.h, invalidRequest, sending)
+			sent <- struct{}{}
+			return
+		}
+		server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+		sent <- struct{}{}
+	}()
+
+	if handleTimeout == 0 {
+		<-called
+		<-sent
 		return
 	}
-	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+
+	select {
+	case <-time.After(handleTimeout):
+		req.h.Error = fmt.Sprintf("rpc server: request handle timeout, expect within:%s", handleTimeout)
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+	case <-called:
+		<-sent
+	}
+}
+
+const (
+	connected        = "200 Connected to Gee RPC"
+	defaultRPCPath   = "/_geerpc_"
+	defaultDebugPath = "/debug/geerpc"
+)
+
+func HandleHTTP() {
+	DefaultServer.HandleHTTP()
+}
+
+func (server *Server) HandleHTTP() {
+	// 启动 HTTP Server 端，同时监听的 path 是：defaultRPCPath 和 defaultDebugPath
+	http.Handle(defaultRPCPath, server)
+	// http.Handle(defaultDebugPath, )
+}
+
+func (server *Server) ServeHTTP(rw http.ResponseWriter, request *http.Request) {
+	Info("request.Method:%s", request.Method)
+
+	if request.Method != http.MethodConnect {
+		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		rw.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(rw, "405 must CONNECT method\n")
+		return
+	}
+
+	conn, _, err := rw.(http.Hijacker).Hijack()
+	if err != nil {
+		log.Print("rpc hijacker, remote:", request.RemoteAddr, ": ", err.Error())
+		return
+	}
+	_, _ = io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
+	server.ServeConn(conn)
 }
