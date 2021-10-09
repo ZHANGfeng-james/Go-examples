@@ -41,6 +41,7 @@ func DialHTTP(network, address string, opts ...*Option) (client *Client, err err
 
 func NewClientHTTP(conn net.Conn, opt *Option) (*Client, error) {
 	Info("NewClientHTTP write to net.Conn")
+
 	_, _ = io.WriteString(conn, fmt.Sprintf("CONNECT %s HTTP/1.0\n\n", defaultRPCPath))
 	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
 	Info("resp.Status:%s", resp.Status)

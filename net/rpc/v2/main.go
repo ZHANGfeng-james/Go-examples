@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -22,26 +23,67 @@ func (f Foo) Sum(args Args, reply *int) error {
 	return nil
 }
 
-func startServer(addr chan string) {
-	var foo Foo
-	if err := rpc.Register(&foo); err != nil {
-		log.Fatal("register error:", err)
-	}
+func main() {
+	addrCh := make(chan string)
+	go func(addrCh chan string) {
+		var foo Foo
+		if err := rpc.Register(&foo); err != nil {
+			log.Fatal("register error:", err)
+		}
 
-	l, err := net.Listen("tcp", ":0")
-	if err != nil {
-		log.Fatal("network error:", err)
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			log.Fatal("network error:", err)
+		}
+		log.Println("start rpc server on", l.Addr())
+		addrCh <- l.Addr().String()
+
+		rpc.HandleHTTP()
+		_ = http.Serve(l, nil) // 启动HTTP服务器
+	}(addrCh)
+
+	client, _ := rpc.DialHTTP("tcp", <-addrCh)
+	defer func() { _ = client.Close() }()
+
+	time.Sleep(2 * time.Second)
+	// send request & receive response
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args := &Args{Num1: i, Num2: i * i}
+			var reply int
+			if err := client.Call(context.Background(), "Foo.Sum", args, &reply); err != nil {
+				log.Fatal("call Foo.Sum error:", err)
+			}
+			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
+		}(i)
 	}
-	log.Println("start rpc server on", l.Addr())
-	addr <- l.Addr().String()
-	rpc.Accept(l) // 接收 net.Listener
+	wg.Wait()
+
+	time.Sleep(10 * time.Second)
 }
 
-func main() {
+func test() {
+
 	log.SetFlags(0)
 
 	addr := make(chan string)
-	go startServer(addr)
+	go func(addrCh chan string) {
+		var foo Foo
+		if err := rpc.Register(&foo); err != nil {
+			log.Fatal("register error:", err)
+		}
+
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			log.Fatal("network error:", err)
+		}
+		log.Println("start rpc server on", l.Addr())
+		addr <- l.Addr().String()
+		rpc.Accept(l) // 接收 net.Listener
+	}(addr)
 
 	client, err := rpc.Dial("tcp", <-addr, &rpc.Option{HandleTimeout: 2 * time.Second})
 	if client == nil {
@@ -78,31 +120,5 @@ func main() {
 		}(i)
 	}
 
-	wg.Wait()
-}
-
-func test() {
-
-	addrCh := make(chan string)
-	go startServer(addrCh)
-
-	client, _ := rpc.DialHTTP("tcp", <-addrCh)
-	defer func() { _ = client.Close() }()
-
-	time.Sleep(2 * time.Second)
-	// send request & receive response
-	var wg sync.WaitGroup
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			args := &Args{Num1: i, Num2: i * i}
-			var reply int
-			if err := client.Call(context.Background(), "Foo.Sum", args, &reply); err != nil {
-				log.Fatal("call Foo.Sum error:", err)
-			}
-			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
-		}(i)
-	}
 	wg.Wait()
 }

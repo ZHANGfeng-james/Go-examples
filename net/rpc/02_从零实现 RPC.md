@@ -1557,13 +1557,116 @@ Web 开发中，我们经常使用 HTTP 协议中的 HEAD/GET/POST 等方式发�
 2. RPC 服务器返回 HTTP 200 状态码表示连接建立成功；
 3. 客户端使用创建好的连接（net.Conn）发送 RPC 报文，先发送 Option，再发送请求报文。服务端处理 RPC 请求并响应。
 
+~~~go
+const (
+	connected        = "200 Connected to Gee RPC"
+	defaultRPCPath   = "/_geerpc_"
+	defaultDebugPath = "/debug/geerpc"
+)
 
+func HandleHTTP() {
+	DefaultServer.HandleHTTP()
+}
 
+func (server *Server) HandleHTTP() {
+	// 启动 HTTP Server 端，同时监听的 path 是：defaultRPCPath 和 defaultDebugPath
+	http.Handle(defaultRPCPath, server)
+	http.Handle(defaultDebugPath, debugHTTP{server})
+}
 
+// 接收到的是 HTTP 协议的内容，自动转化到 ServeHTTP 方法中
+func (server *Server) ServeHTTP(rw http.ResponseWriter, request *http.Request) {
+	Info("request.Method:%s", request.Method)
 
+	if request.Method != http.MethodConnect {
+		rw.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		rw.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(rw, "405 must CONNECT method\n")
+		return
+	}
 
+	conn, _, err := rw.(http.Hijacker).Hijack()
+	if err != nil {
+		log.Print("rpc hijacker, remote:", request.RemoteAddr, ": ", err.Error())
+		return
+	}
+	_, _ = io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
+	server.ServeConn(conn)
+}
+~~~
 
+复用建立的 net.Conn 实例，并转化到 RPC 协议上，和原先是一样的。
 
+**「Client 端实现协议协议转换」**：
+
+~~~go
+func DialHTTP(network, address string, opts ...*Option) (client *Client, err error) {
+	return dialTimeout(NewClientHTTP, network, address, opts...)
+}
+
+func NewClientHTTP(conn net.Conn, opt *Option) (*Client, error) {
+	Info("NewClientHTTP write to net.Conn")
+
+	_, _ = io.WriteString(conn, fmt.Sprintf("CONNECT %s HTTP/1.0\n\n", defaultRPCPath))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
+	Info("resp.Status:%s", resp.Status)
+	if err == nil && resp.Status == connected {
+		return NewClient(conn, opt)
+	}
+	if err == nil {
+		err = errors.New("unexpected HTTP status:" + resp.Status)
+	}
+	return nil, err
+}
+~~~
+
+其关键部分就是，Client 执行 Dial 后，向 net.Conn 写入符合 HTTP 协议的 「起始行/Header/Body」部分，使用的是 CONNECT 方法。同时，接收 Server 端的指定反馈，最后转换到 RPC 协议上，和之前完全一样。
+
+测试程序：
+
+~~~go
+func main() {
+	addrCh := make(chan string)
+	go func(addrCh chan string) {
+		var foo Foo
+		if err := rpc.Register(&foo); err != nil {
+			log.Fatal("register error:", err)
+		}
+
+		l, err := net.Listen("tcp", ":0")
+		if err != nil {
+			log.Fatal("network error:", err)
+		}
+		log.Println("start rpc server on", l.Addr())
+		addrCh <- l.Addr().String()
+
+		rpc.HandleHTTP()
+		_ = http.Serve(l, nil) // 启动HTTP服务器
+	}(addrCh)
+
+	client, _ := rpc.DialHTTP("tcp", <-addrCh)
+	defer func() { _ = client.Close() }()
+
+	time.Sleep(2 * time.Second)
+	// send request & receive response
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			args := &Args{Num1: i, Num2: i * i}
+			var reply int
+			if err := client.Call(context.Background(), "Foo.Sum", args, &reply); err != nil {
+				log.Fatal("call Foo.Sum error:", err)
+			}
+			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
+		}(i)
+	}
+	wg.Wait()
+
+	time.Sleep(10 * time.Second)
+}
+~~~
 
 # 6 负载均衡
 

@@ -237,7 +237,7 @@ func HandleHTTP() {
 func (server *Server) HandleHTTP() {
 	// 启动 HTTP Server 端，同时监听的 path 是：defaultRPCPath 和 defaultDebugPath
 	http.Handle(defaultRPCPath, server)
-	// http.Handle(defaultDebugPath, )
+	http.Handle(defaultDebugPath, debugHTTP{server})
 }
 
 func (server *Server) ServeHTTP(rw http.ResponseWriter, request *http.Request) {
