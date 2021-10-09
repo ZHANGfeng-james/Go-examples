@@ -79,7 +79,8 @@ func (server *Server) Accept(lis net.Listener) {
 }
 
 func Accept(lis net.Listener) {
-	DefaultServer.Accept(lis) // net.Listener 从哪里来？
+	// net.Listener 从哪里来？ l, err := net.Listen("tcp", ":0")
+	DefaultServer.Accept(lis)
 }
 
 func (server *Server) ServeConn(conn io.ReadWriteCloser) {
@@ -109,9 +110,10 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 
 var invalidRequest = struct{}{}
 
+// 也就是一次连接中，紧接在 Option 之后的部分：Header 和 Body
 type request struct {
-	h            *codec.Header
-	argv, replyv reflect.Value
+	h            *codec.Header // Header
+	argv, replyv reflect.Value // Body
 
 	mtype *methodType
 	svc   *service
@@ -167,14 +169,16 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 		return req, err
 	}
 
+	// 依据 methodName 获取对应的入参类型和返回值类型，并构造实例
 	req.argv = req.mtype.newArgv()
 	req.replyv = req.mtype.newReplyv()
 
 	argvi := req.argv.Interface()
 	if req.argv.Type().Kind() != reflect.Ptr {
+		// 必须要能够修改这个值
 		argvi = req.argv.Addr().Interface()
 	}
-
+	// 字节流反序列化成变量值
 	if err = cc.ReadBody(argvi); err != nil {
 		// gob: type mismatch in decoder: want struct type main.Args; got non-struct
 		log.Println("rpc server: read body err:", err)

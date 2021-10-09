@@ -35,18 +35,19 @@ func (gob *GobCodec) ReadBody(body interface{}) error {
 
 func (gob *GobCodec) Write(h *Header, body interface{}) (err error) {
 	defer func() {
+		// buf 此处并没有装载任何数据，调用 Flush() 也无任何实际作用
 		_ = gob.buf.Flush()
 		if err != nil {
 			_ = gob.Close()
 		}
 	}()
 
-	// write header
+	// write header，仅仅给的是 h *Header 类型实例
 	if err := gob.enc.Encode(h); err != nil {
 		log.Println("rpc codec: gob error encoding header:", err)
 		return err
 	}
-	// write body
+	// write body，仅仅给的是一个 interface{} 类型的实例
 	if err := gob.enc.Encode(body); err != nil {
 		log.Println("rpc codec: gob error encoding body:", err)
 		return err

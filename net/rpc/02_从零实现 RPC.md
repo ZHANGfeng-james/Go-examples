@@ -1,4 +1,4 @@
-RPC——远程过程调用，是一种**计算机通信协议**，允许调用**不同进程空间**的程序。RPC 的客户端和服务器可以在一台机器上，也可以在不同的机器上。程序员使用时，就像调用本地程序一样，无需关注内部的实现细节。
+RPC——远程过程调用，是一种**计算机通信协议**，允许调用**不同进程空间**的程序。RPC 的客户端和服务器可以在一台机器上，也可以在不同的机器上。程序员使用时，就像调用本地程序一样，**无需关注内部的实现细节**。
 
 **不同的应用程序**之间的**通信方式**有很多，比如浏览器和服务器之间广泛使用的**基于 HTTP 协议的 RESTfull API 标准**。与 RPC 相比，RESTfull API 有相对统一的标准，因而更通用，兼容性更好，支持不同的语言。HTTP 协议是**基于文本的**，一般具备**更好的可读性**。但是**缺点**也很明显：
 
@@ -7,17 +7,19 @@ RPC——远程过程调用，是一种**计算机通信协议**，允许调用*
 - RPC 可以采用**更高效的序列化协议**，将文本转为二进制传输，获得更高的性能。
 - 因为 RPC 的灵活性，所以更容易扩展和集成诸如注册中心、负载均衡等功能。
 
-从底层网络传输的内容来看，就是不同的协议：HTTP协议——底层是 TCP 协议，而本文讨论的主题是 RPC，其本身就是基于传输二进制数据的 TCP 协议的应用层协议。
+从底层网络传输的内容来看，实际上就是本文讨论的主题是 RPC，其本身就是**基于传输二进制数据**的 TCP 协议的应用层协议。与之不同的是，HTTP 的底层也是 TCP 协议的应用层协议（**基于文本**）。
 
-RPC 框架需要解决什么问题？为什么需要 RPC 框架？
+**RPC 框架需要解决什么问题？为什么需要 RPC 框架**？
 
 我们可以想象下**两台机器上，两个应用程序之间需要通信**，那么首先，需要确定采用的**传输协议**是什么？如果这两个应用程序位于不同的机器，那么一般会选择 TCP 协议或者 HTTP 协议；那如果两个应用程序位于相同的机器，也可以选择 Unix Socket 协议。传输协议确定之后，还需要确定**报文的编码格式**，比如采用最常用的 JSON 或者 XML，那如果报文比较大，还可能会选择 protobuf 等其他的编码方式，甚至编码之后，再进行压缩。接收端获取报文则需要相反的过程，先解压再解码。
+
+> Protobuf 是一种数据表示格式，是 Google 出品的一种描述数据内容的方式和格式，传输效率高。
 
 解决了传输协议和报文编码的问题，接下来还需要解决一系列的**可用性问题**，例如，连接超时了怎么办？是否支持异步请求和并发？
 
 如果服务端的实例很多，客户端并不关心这些实例的地址和部署位置，只关心自己能否获取到期待的结果，那就引出了**注册中心(registry)和负载均衡(load balance)的问题**。简单地说，即客户端和服务端互相不感知对方的存在，服务端启动时将自己注册到注册中心，客户端调用时，从注册中心获取到所有可用的实例，选择一个来调用。这样服务端和客户端只需要感知注册中心的存在就够了。注册中心通常还需要实现服务动态添加、删除，使用心跳确保服务处于可用状态等功能。
 
-再进一步，假设服务端是不同的团队提供的，如果没有**统一的 RPC 框架**，各个团队的服务提供方就需要各自实现一套消息编解码、连接池、收发线程、超时处理等“业务之外”的重复技术劳动，造成整体的低效。因此，“业务之外”的这部分公共的能力，即是 RPC 框架所需要具备的能力。
+再进一步，假设服务端是不同的团队提供的，如果没有**统一的 RPC 框架**，各个团队的服务提供方就需要各自实现一套消息编解码、连接池、收发线程、超时处理等“业务之外”的重复技术劳动，造成整体的低效。因此，**“业务之外”的这部分公共的能力，即是 RPC 框架所需要具备的能力**。
 
 > RPC 框架本质上是要解决端之间的数据通信问题。
 
@@ -39,7 +41,7 @@ err = client.Call("Arith.Multiply", args, &reply)
 
 客户端发送的请求包括服务名 `Arith`，对应服务下的某个方法 `Multiply`，以及发送给这个方法的入参。紧接着的是返回值：reply，以及调用的状态反馈 err。
 
-我们将请求和响应中的参数和返回值抽象为 body，剩余的信息放在 header 中，那么就可以抽象出数据结构 Header：
+我们将请求的参数和返回值抽象在 Body 中，剩余的信息放在 Header 中，那么就可以抽象出数据结构 Header：
 
 ~~~go
 type Header struct {
@@ -49,9 +51,9 @@ type Header struct {
 }
 ~~~
 
-上面说的 Header 和 Body 部分就是对于一个 HTTP 通信来说的，将一个消息划分为相同的结构。ServiceMethod 是服务名和方法名，通常与 Go 语言中的结构体和方法相映射。Seq 是请求的序列号，也可以认为是某个请求的 ID，用来区分不同的请求。请求的参数和返回值抽象在 Body 中。
+上面说的 Header 和 Body 部分就是对于一个 HTTP 通信来说的，将一个消息划分为相同的结构。ServiceMethod 是服务名和方法名，通常与 Go 语言中的结构体类型名和方法名相映射。Seq 是请求的序列号，也可以认为是某个请求的 ID，用来区分不同的请求，是有 Client 端给定。
 
-最终的传输内容格式：
+最终的传输内容格式设计成：
 
 ~~~bash
 | Option{MagicNumber: xxx, CodecType: xxx} | Header{ServiceMethod ...} | Body interface{} |
@@ -85,7 +87,7 @@ func init() {
 }
 ~~~
 
-GobCodec 作为 Codec 的一种，需要实现 4 种方法：
+GobCodec 作为 Codec 的一种，需要实现 4 个方法：
 
 ~~~go
 package codec
@@ -209,7 +211,8 @@ func (server *Server) Accept(lis net.Listener) {
 }
 
 func Accept(lis net.Listener) {
-	DefaultServer.Accept(lis) // net.Listener 从哪里来？
+    // net.Listener 从哪里来？ l, err := net.Listen("tcp", ":0")
+	DefaultServer.Accept(lis)
 }
 ~~~
 
@@ -252,9 +255,10 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 
 var invalidRequest = struct{}{}
 
-type request struct { // 相当于是 Option 后续的 Header 和 Body 部分
-	h            *codec.Header
-	argv, replyv reflect.Value
+// 相当于是 Option 后续的 Header 和 Body 部分，一次 net.Conn 仅需要传输一次 Option
+type request struct {
+	h            *codec.Header // Header
+	argv, replyv reflect.Value // Body
 }
 
 type Header struct {
@@ -282,7 +286,7 @@ func (server *Server) serveCodec(cc codec.Codec) {
 			continue
 		}
 		wg.Add(1)
-		// 处理请求
+		// 处理请求 和 回复请求
 		go server.handleRequest(cc, req, sending, wg)
 	}
 	wg.Wait()
@@ -301,7 +305,7 @@ func (server *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 }
 
 func (server *Server) readRequest(cc codec.Codec) (*request, error) {
-	// | Option | Header1 | Body1 | Header2 | Body2 |...
+    // | Option | {Header1 | Body1} | {Header2 | Body2} |...
 	h, err := server.readRequestHeader(cc)
 	if err != nil {
 		return nil, err
@@ -309,7 +313,7 @@ func (server *Server) readRequest(cc codec.Codec) (*request, error) {
 
 	req := &request{h: h}
 	// 通过 cc.ReadBody 修改 req.argv 的值，req.argv 在当前是作为一个 string 类型
-	req.argv = reflect.New(reflect.TypeOf(""))
+	req.argv = reflect.New(reflect.TypeOf("")) // *string --> reflect.Value
     // 作为一个 codec，ReadHeader 和 ReadBody 时，需要标记已读取的字节序号
 	if err = cc.ReadBody(req.argv.Interface()); err != nil {
 		log.Println("rpc server: read argv err:", err)
@@ -416,7 +420,9 @@ ant@MacBook-Pro v2 % go run main.go
 2021/10/07 15:50:21 reply: geerepc resp 4
 ~~~
 
-Client 在发出请求时，需要在消息的头部添加 Option 内容，但对于 Server 来说，写入的反馈就不需要 Option 内容了。
+Client 在发出请求时，需要在消息的头部添加 Option 内容，但对于 Server 来说，写入的反馈就不需要 Option 内容了。上述测试用例中，并发 RPC 请求 Server 端的数据，其中 Option 仅在创建了 net.Conn 之后发送一次，后续不再发送。而 Header 会多次发送，对应 Body 也会多次发送。
+
+> 此处的疑问是：Body 部分的 req.argv 是如何被解析出来的？
 
 # 2 支持并发与异步的客户端
 
@@ -488,7 +494,7 @@ func main() {
 ~~~go
 type Client struct {
 	seq uint64      // 用于给请求编号，每个请求拥有唯一编号
-	cc  codec.Codec // 消息的编解码器，序列化将要发出去的请求，反序列号接收到的响应
+	cc  codec.Codec // 消息的编解码器，序列化将要发出去的请求，反序列化接收到的响应
 	opt *Option
 
 	mu      sync.Mutex       // 支持对 pending 的并发读写
@@ -555,6 +561,7 @@ func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 		return nil, err
 	}
 	// Client 发送给 Server 的格式：| Option | Header1 | Body1 | Header2 | Body2 |...
+    // 也就是让 Server 知道 Client 当前的协议格式，一种协商措施
 	if err := json.NewEncoder(conn).Encode(opt); err != nil {
 		log.Println("rpc client: options error:", err)
 		_ = conn.Close()
@@ -813,7 +820,7 @@ func main() {
 	typ := reflect.TypeOf(&wg)
 
 	for i := 0; i < typ.NumMethod(); i++ {
-		method := typ.Method(i)
+		method := typ.Method(i) // reflect.Method
 
 		argv := make([]string, 0, method.Type.NumIn())     // the type of method, Func
 		returns := make([]string, 0, method.Type.NumOut()) // Func
@@ -869,24 +876,25 @@ func (m *methodType) NumCalls() uint64 {
 func (m *methodType) newArgv() reflect.Value {
 	var argv reflect.Value
 
+    // 创建 reflect.Value 准备接收 request.argv
 	if m.ArgType.Kind() == reflect.Ptr {
-		// 指针类型创建实例
-		argv = reflect.New(m.ArgType.Elem()) // reflect.Type.Elem()
+		argv = reflect.New(m.ArgType.Elem()) // reflect.Type.Elem() --> reflect.Type
 	} else {
-		// 值类型创建实例
 		argv = reflect.New(m.ArgType).Elem() // reflect.Value.Elem()
 	}
 	return argv
 }
 
 func (m *methodType) newReplyv() reflect.Value {
-	// reply must be a pointer type
+	// reply must be a pointer type，这是 RPC 协议规定的
 	replyv := reflect.New(m.ReplyType.Elem())
 
 	switch m.ReplyType.Elem().Kind() {
 	case reflect.Map:
+        // 初始化
 		replyv.Elem().Set(reflect.MakeMap(m.ReplyType.Elem()))
 	case reflect.Slice:
+        // 初始化
 		replyv.Elem().Set(reflect.MakeSlice(m.ReplyType.Elem(), 0, 0))
 	}
 	return replyv
@@ -913,7 +921,7 @@ type service struct {
 func newService(receiver interface{}) *service {
 	s := new(service)
 
-	s.rcvr = reflect.ValueOf(receiver)
+	s.rcvr = reflect.ValueOf(receiver) // 这个结构体的实例
 
 	s.name = reflect.Indirect(s.rcvr).Type().Name()
 	s.typ = reflect.TypeOf(receiver)
@@ -1043,17 +1051,231 @@ func TestMethodType_Call(t *testing.T) {
 2. 调用 service.call 完成方法调用；
 3. 将 reply 序列化为字节流，构造响应报文。
 
+将服务的注册过程集成到 Server 中：
 
+~~~go
+type Server struct {
+	serviceMap sync.Map
+}
 
+func NewServer() *Server {
+	return &Server{}
+}
 
+var DefaultServer = NewServer()
 
+func (server *Server) Register(rcvr interface{}) error {
+	s := newService(rcvr)
+	if _, dup := server.serviceMap.LoadOrStore(s.name, s); dup {
+		return errors.New("rpc: service already defined: " + s.name)
+	}
+	return nil
+}
 
+func Register(rcvr interface{}) error {
+	return DefaultServer.Register(rcvr)
+}
+~~~
 
+为 Server 新增一个字段，表示该 Server 中已注册的所有 Service。
 
+相应的，实现从 Server 中查找指定名称 Server 的方法：
 
+~~~go
+func (server *Server) findService(serviceMethod string) (svc *service, mtype *methodType, err error) {
+	dot := strings.LastIndex(serviceMethod, ".")
+	if dot < 0 {
+		err = errors.New("rpc service: service/method request ill-formed: " + serviceMethod)
+		return
+	}
+	serviceName, methodName := serviceMethod[:dot], serviceMethod[dot+1:]
+	svic, ok := server.serviceMap.Load(serviceName)
+	if !ok {
+		err = errors.New("rpc server: can not find service " + methodName)
+		return
+	}
+	svc = svic.(*service)
+	mtype = svc.method[methodName] // 从 service 中获取到指定名称的方法
+	if mtype == nil {
+		err = errors.New("rpc server: can not find method " + methodName)
+	}
+	return
+}
+~~~
 
+另外对于一次 `<Header | Body>`，为 request 新增字段：
+
+~~~go
+// 也就是一次连接中，紧接在 Option 之后的部分：Header 和 Body
+type request struct {
+	h            *codec.Header // Header
+	argv, replyv reflect.Value // Body
+
+	mtype *methodType
+	svc   *service
+}
+~~~
+
+因此，从Request中读取到 Header 后就可以解析出对应的 service：
+
+~~~go
+func (server *Server) readRequest(cc codec.Codec) (*request, error) {
+	// | Option | Header1 | Body1 | Header2 | Body2 |...
+	h, err := server.readRequestHeader(cc)
+	if err != nil {
+		return nil, err
+	}
+
+	req := &request{h: h}
+	req.svc, req.mtype, err = server.findService(h.ServiceMethod)
+	if err != nil {
+		return req, err
+	}
+
+	// 依据 methodName 获取对应的入参类型和返回值类型，并构造实例
+	req.argv = req.mtype.newArgv()
+	req.replyv = req.mtype.newReplyv()
+
+	argvi := req.argv.Interface()
+	if req.argv.Type().Kind() != reflect.Ptr {
+		// 必须要能够修改这个值
+		argvi = req.argv.Addr().Interface()
+	}
+	// 字节流反序列化成变量值
+	if err = cc.ReadBody(argvi); err != nil {
+		// gob: type mismatch in decoder: want struct type main.Args; got non-struct
+		log.Println("rpc server: read body err:", err)
+		return req, err
+	}
+
+	return req, nil
+}
+~~~
+
+紧接着就是执行对应的 RPC 方法：
+
+~~~go
+func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	err := req.svc.call(req.mtype, req.argv, req.replyv)
+	if err != nil {
+		req.h.Error = err.Error()
+		server.sendResponse(cc, req.h, invalidRequest, sending)
+		return
+	}
+	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+}
+~~~
+
+具体的：
+
+~~~go
+func (s *service) call(m *methodType, argv, replyv reflect.Value) error {
+	atomic.AddUint64(&m.numCalls, 1)
+
+	// m.method 是 reflect.Method 类型 --> reflect.Value 类型，且其 Kind 是 Func
+	f := m.method.Func
+
+	returnValues := f.Call([]reflect.Value{s.rcvr, argv, replyv})
+	if errInter := returnValues[0].Interface(); errInter != nil {
+		return errInter.(error)
+	}
+	return nil
+}
+~~~
+
+测试代码：
+
+~~~go
+package main
+
+import (
+	"log"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/go-examples-with-tests/net/rpc/v2/rpc"
+)
+
+type Foo int
+
+type Args struct {
+	Num1 int
+	Num2 int
+}
+
+func (f Foo) Sum(args Args, reply *int) error {
+	*reply = args.Num1 + args.Num2
+	return nil
+}
+
+func startServer(addr chan string) {
+	var foo Foo
+	if err := rpc.Register(&foo); err != nil {
+		log.Fatal("register error:", err)
+	}
+
+	l, err := net.Listen("tcp", ":0")
+	if err != nil {
+		log.Fatal("network error:", err)
+	}
+	log.Println("start rpc server on", l.Addr())
+	addr <- l.Addr().String()
+	rpc.Accept(l) // 接收 net.Listener
+}
+
+func main() {
+	log.SetFlags(0)
+
+	addr := make(chan string)
+	go startServer(addr)
+
+	client, _ := rpc.Dial("tcp", <-addr)
+	defer func() {
+		// 原先是 net.Conn
+		_ = client.Close()
+	}()
+
+	time.Sleep(5 * time.Second)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+
+			args := &Args{Num1: i, Num2: i * i}
+			var reply int
+			if err := client.Call("Foo.Sum", args, &reply); err != nil {
+				log.Fatal("call Foo.Sum error:", err)
+			}
+			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
+		}(i)
+	}
+
+	wg.Wait()
+}
+~~~
 
 # 4 超时处理
+
+超时处理是 RPC 框架一个比较基本的能力，如果缺少**超时处理机制**，无论是**服务端**还是**客户端**都容易因为网络或其他错误导致挂起，资源耗尽，这些问题的出现大大降低了**服务的可用性**。因此，我们需要在 RPC 框架中加入超时处理的能力。
+
+纵观整个远程调用的过程，**需要客户端处理超时**的地方有：与服务端建立连接；发送请求到服务端，写报文时；等待服务端处理，等待处理，而服务端因为某些原因已宕机，无法响应；从服务端接收响应结果，读报文。**需要服务端处理超时**的地方有：读取客户端请求报文；调用映射服务的方法，处理报文导致超时异常；发送响应报文，写报文导致超时。
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

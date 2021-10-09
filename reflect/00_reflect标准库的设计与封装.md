@@ -50,7 +50,7 @@ type Type interface{ ... }
 
 **反射机制的基础**是**类型系统**，因此，我们从 Go 语言中的类型开始。
 
-Go 语言是一种**静态类型**的编程语言。每个变量都有一个静态类型，这个类型在编译期被确定（已知、固定），比如 int、float32、*MyType、[]byte 等等。如果我们声明如下：
+Go 语言是一种**静态类型**的编程语言。**每个变量都有一个静态类型**，这个（静态）类型在**编译期**被确定（已知、固定），比如 int、float32、*MyType、[]byte 等等。如果我们声明如下：
 
 ~~~go
 type MyInt int
@@ -61,7 +61,7 @@ var j MyInt
 
 这样，变量 i 的类型是 int；变量 j 的类型是 MyInt。变量 i 和 j 有**不相同的静态类型**，虽然它们具有**相同的底层类型**，但如果没有显式地转换，相互之间是不能被赋值的。
 
-关于类型的一个重要类别是 interface 的类型，其中 interface 表示的是一系列固定方法的集合。一个接口变量可以用于保存任何固定值（非接口值），但这个值必须实现了 interface 的所有方法。一个很显然的实例是来自 io 包中的接口 io.Reader 和 io.Writer：
+关于类型的一个重要类别是 interface 的类型，其中 interface 表示的是一系列固定方法的集合。**一个接口变量**可以用于保存任何固定值（非接口值），但这个值必须实现了 interface 的所有方法。一个很显然的实例是来自 io 包中的接口 io.Reader 和 io.Writer：
 
 ~~~go
 // Reader is the interface that wraps the basic Read method.
@@ -95,13 +95,13 @@ interface{}
 
 `interface{}` 在 Go 中是**一种类型**，它代表的是**一个空的方法集合**，Go 语言中的任何值都满足条件（因为任何值都存在 0 个或更多数目的方法）。也就是说，`interface{}` 类型的变量，可以装载任何 Go 语言中的值。
 
-一些开发人员说：Go 中的接口是**动态类型**的，这实际上是**误导**！它们仍然是**静态类型**的：一个接口类型的变量始终具有相同的静态类型（比如上面说的 io.Reader 类型），虽然在 Runtime 时期保存在接口变量中的值可能改变其类型，但是这个值仍然是满足于接口类型的（值的真实类型是实现了接口方法）。
+一些开发人员说：Go 中的接口是**动态类型**的，这实际上是**误导**！它们仍然是**静态类型**的：一个接口类型的变量始终具有相同的静态类型（比如上面说的 io.Reader 类型），虽然在 Runtime 时期保存在接口变量中的值可能改变其类型，但是这个值仍然是满足于接口类型的（值的真实类型实现了接口方法）。
 
 我们需要更加详细的理解上面的内容，因为**反射**和**接口**是非常接近的。
 
 ## 1.2 一个接口的表示
 
-一个接口类型的变量存储了**一对值**：赋值给变量的固定（明确）**值**，以及关于值的**类型描述符**。也就是：`(value - type descriptor)`。更加详细的：value 是实现了这个接口的类型值，type 描述符是关于类型的完整描述。比如，下述示例程序：
+**一个接口类型的变量**存储了**一对值**：赋值给变量的固定（明确）**值**，以及关于（这个）值的**类型描述符**。也就是：`(value - type descriptor)`。更加详细的：value 是实现了这个接口的类型值，type 描述符是关于（这个值的）类型的完整描述。比如，下述示例程序：
 
 ~~~go
 var r io.Reader
@@ -130,13 +130,21 @@ empty = w
 
 这个 `interface{}` 类型的值中也包含了相同的  `(value - type descriptor)` —— `(tty, *os.File)`。**很方便**，一个空接口可以承载任何值，而且还包含了和这个值相关的任何信息。
 
-上面的这个赋值是不需要类型断言的，因为 w 实现了 `interface{}` 接口。在之前的示例程序中，我们将值从一个 Reader 赋值给一个 Writer，需要一个显式的类型断言，因为 Writer 的方法并不是 Reader 的子集。
+上面的这个赋值是不需要类型断言的，因为 w 实现了 `interface{}` 接口（**如果需要断言，反而是一种冗余**）。在之前的示例程序中，我们将值从一个 Reader 赋值给一个 Writer，需要一个显式的类型断言，因为 Writer 的方法并不是 Reader 的子集。
 
-一个重要的细节是： 一个接口值中的`(value - type descriptor)` 具有严格的要求，必须是 `(value - concrete type)` 而不能是 `(value, interface type)`。也就是说，**接口不能用来承载接口值**。
+一个重要的细节是： 一个接口值中的`(value - type descriptor)` 具有严格的要求，必须是 `(value - concrete type)` 而不能是 `(value, interface type)`。也就是说，**接口变量不能用来承载接口值**。
 
 ## 1.3 反射规则：从 interface 值到 reflect 实体值
 
-在“新手村”——最开始认识 reflection 时，我们可以这样认为：反射仅仅就是一种**检查 interface 变量**中  `(value - type descriptor)` 的机制。最开始，我们需要知道在 reflect 标准库中的 2 种类型：Type 和 Value。这两个类型提供了访问一个接口变量中的  `(value - type descriptor)` 的方式，以及 2 个简单的函数：`reflect.TypeOf` 和 `reflect.ValueOf`，对应的能够解析出一个 interface 变量中的 reflect.Type 和 reflect.Value 值。（当然了，通过 reflect.Value 也是有办法获取到对应的 reflect.Type 的，但是在这里，保持 Value 和 Type 概念的独立性）
+在“新手村”——最开始认识 reflection 时，我们可以这样认为：反射仅仅就是一种**检查 interface 变量**中  `(value - type descriptor)` 的**机制**。
+
+> 反射是一种检查 interface 变量中的 `<value - type descriptor>` 的机制。
+>
+> 那问题在于：reflect.ValueOf(variable) 得到的 reflect.Value 类型值到底是什么？同样的，reflect.TypeOf(variable) 得到的 reflect.Type 类型值到底是什么？
+>
+> 此时，我能得到的答案是：reflect.Value 是 variable 的**值信息**；reflect.Type 是 variable 的**类型信息**。
+
+最开始，我们需要知道在 reflect 标准库中的 2 种类型：Type 和 Value。这两个类型提供了访问一个接口变量中的  `(value - type descriptor)` 的方式，以及 2 个简单的函数：`reflect.TypeOf` 和 `reflect.ValueOf`，对应的能够解析出一个 interface 变量中的 reflect.Type 和 reflect.Value 值。（当然了，通过 reflect.Value 也是有办法获取到对应的 reflect.Type 的，但是在这里，保持 Value 和 Type 概念的独立性）
 
 我们从 TypeOf 开始：
 
@@ -166,7 +174,7 @@ func TypeOf(i interface{}) Type {
 }
 ~~~
 
-在 TypeOf 的参数中，确实是一个 interface{} 类型的变量等着接收入参值。当我们调用 `reflect.TypeOf(x)` 时，x 值首先会作为入参被存储到一个空的接口中，紧接着 `reflect.TypeOf` 会 **unpack 这个空接口值**，并**从中恢复出类型信息**。
+在 TypeOf 的参数中，确实是一个 interface{} 类型的变量用于**接收入参值**。当我们调用 `reflect.TypeOf(x)` 时，x 值首先会作为入参被存储到一个空的接口中，紧接着 `reflect.TypeOf` 会 **unpack 这个空接口值**，并**从中恢复出类型信息**。
 
 同样的，对于 `reflect.ValueOf` 函数来说，会从这个空接口值中恢复出值：
 
@@ -195,7 +203,7 @@ fmt.Println("value:", v.Float())
 
 reflect 标准库中有一些属性值得挑出来：
 
-1. Value 的 `getter` 和 `setter` 方法是用于操作最长类型，比如 int64 是用于所有有符号整型值。也就是说，`Int` 方法能够返回一个 `int64`，`SetInt` 方法能够设置一个 int64 的值。因此，有些情况下可能需要做类型转换。
+1. Value 的 `getter` 和 `setter` 方法是用于操作最长类型（int64 或者是 float64 类型），比如 int64 是用于所有有符号整型值。也就是说，`Int` 方法能够返回一个 `int64`，`SetInt` 方法能够设置一个 int64 的值。因此，有些情况下可能需要做类型转换。
 
    ~~~go
    var x uint8 = 'x'
@@ -232,7 +240,7 @@ reflect 标准库中有一些属性值得挑出来：
 
 类似于物理中的反射，Go 语言中的反射会存在一个**逆向**过程。
 
-给定一个 reflect.Value 值，我们可以使用 Interface 方法获取到一个 interface 值。也就是意味着：这个方法能够从 reflect.Value 中获取 `<value - type descriptor>` 值，并重新组装成一个 interface 值：
+给定一个 reflect.Value 值，我们可以**使用 Interface 方法获取到一个 interface 值**。也就是意味着：这个方法能够从 reflect.Value 中获取 `<value - type descriptor>` 值，并重新组装成一个 interface 值（类型是 `interface{}`）：
 
 ~~~go
 // Interface returns v's current value as an interface{}.
@@ -241,7 +249,7 @@ reflect 标准库中有一些属性值得挑出来：
 // It panics if the Value was obtained by accessing
 // unexported struct fields.
 func (v Value) Interface() (i interface{}) {
-	return valueInterface(v, true)
+	return valueInterface(v, true) // var i interface{} = (v's underlying value)
 }
 ~~~
 
@@ -257,14 +265,14 @@ func main() {
 	tmp := value.Interface() // interface{}
 	fmt.Println(tmp)
 
-	v, ok := tmp.(MyInt) // true, is not int
+	v, ok := tmp.(MyInt) // true, is not int, must be MyInt type
 	if ok {
 		fmt.Println(v)
 	}
 }
 ~~~
 
-换句话说，Interface 方法相当于是 ValueOf 函数的逆过程，不同之处在于，Interface 方法的返回值的静态类型始终是 `interface{}`。
+换句话说，Interface 方法相当于是 ValueOf 函数的**逆过程**，不同之处在于，Interface 方法的返回值的静态类型始终是 `interface{}`。
 
 ## 1.5 修改 reflect 值，value 必须是可被修改的
 
@@ -294,7 +302,7 @@ fmt.Println("settability of v:", v.CanSet())
 
 因此，在一个不具有可设置属性的值上调用 Set 方法，显然是不合适的。那么什么是**可设置属性**？
 
-**可设置属性**就像是可取地址类似，是一个比特位。可设置属性的含义就是能够使用 reflect.Value 值改变其底层实际存储的值。**可设置属性取决于 reflect.Value 是否保存其源数据变量**。比如：
+**可设置属性**和可取地址类似，是一个比特位。可设置属性的含义就是**能够使用 reflect.Value 值改变其底层实际存储的值**。**可设置属性取决于 reflect.Value 是否保存其源数据变量**。比如：
 
 ~~~go
 var x float64 = 3.4
@@ -325,7 +333,7 @@ f(&x)
 
 ~~~go
 var x float64 = 3.4
-p := reflect.ValueOf(&x)
+p := reflect.ValueOf(&x) // 由 &x 的值获取了其反射值 p（实际上仍然代表是 &x 这个变量的值信息）
 fmt.Println("type of p:", p.Type())
 fmt.Println("settability of p:", p.CanSet())
 ~~~
@@ -337,20 +345,20 @@ type of p: *float64
 settability of p: false
 ~~~
 
-反射实体 p 并不具有可设置属性，但是**我们并不需要修改 p 的值，实际上是要修改 `*p` 的内容**。为了获取到 p 指向的实体，我们需要调用 reflect.Value 的 Elem 方法：
+反射实体 p 并不具有可设置属性，但是**我们并不需要修改 p 的值，实际上是要修改 `*p` 的内容**。为了**获取到 p 指向的实体**，我们需要调用 reflect.Value 的 Elem 方法：
 
 ~~~go
 v := p.Elem()
 fmt.Println("settability of v:", v.CanSet())
 ~~~
 
-此时 v 就是一个具有可设置属性的反射实体（reflect.Value），并且此时代表的就是变量 x，我们可以通过 v 修改 x 的值。
+此时 v 就是**一个具有可设置属性的反射实体**（reflect.Value），并且此时代表的就是变量 x，我们可以通过 v 修改 x 的值。
 
 总之，我们只需要记住：**如果想要修改源数据，就需要使用变量的指针（地址）**。
 
 ## 1.6 结构体
 
-在上面示例程序中，v 并不是指针本身，但是是从指针衍生出来的 reflect.Value 值。一个更加通用的场景是使用反射机制**修改 struct 的各个字段值**。因为我们已经拿到了结构体变量的地址，就可以修改各个字段的值。
+在上面示例程序中，v 并不是指针本身，不过它是从指针衍生出来的 reflect.Value 值。一个更加通用的场景是使用反射机制**修改 struct 的各个字段值**。因为我们已经拿到了结构体变量的地址，就可以修改各个字段的值。
 
 下面是一个简单的例子用于解析结构体类型值 t。我们使用结构体变量的指针创建反射值，是因为接下来要求修改结构体的字段值。
 
@@ -360,13 +368,23 @@ type T struct {
     B string
 }
 t := T{23, "skidoo"}
-s := reflect.ValueOf(&t).Elem()
-typeOfT := s.Type()
+s := reflect.ValueOf(&t).Elem() // s 类型是 reflect.Value
+typeOfT := s.Type() // typeOfT 类型是 reflect.Type
 for i := 0; i < s.NumField(); i++ {
     f := s.Field(i)
     fmt.Printf("%d: %s %s = %v \n", i, typeOfT.Field(i).Name, f.Type(), f.Interface())
 }
+0: A int = 23 
+1: B string = skidoo 
 ~~~
 
+我们从 s ——reflect.Value 中获取到结构体的各个字段，typeOfT 的类型依然是 reflect.Type，f 的类型依然是 reflect.Value，但是 typeOfT.Field(i) 的返回值类型却是 reflect.StructField。
 
+必须指出来的是：结构体类型 T 中的各个字段必须是**可导出的**，因为只有可导出的字段才能够被修改。
 
+~~~go
+s.Field(0).SetInt(1)
+s.Field(1).SetString("iii")
+~~~
+
+如果此时我们在程序的开始部分使用的是 t，而不是 &t，上述修改结构体变量各个字段的程序会报错。

@@ -67,6 +67,7 @@ func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 		return nil, err
 	}
 	// Client 发送给 Server 的格式：| Option | Header1 | Body1 | Header2 | Body2 |...
+	// 也就是让 Server 知道 Client 当前的协议格式，一种协商措施
 	if err := json.NewEncoder(conn).Encode(opt); err != nil {
 		log.Println("rpc client: options error:", err)
 		_ = conn.Close()

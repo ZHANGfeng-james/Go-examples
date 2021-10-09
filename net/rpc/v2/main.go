@@ -1,10 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"net"
-	"reflect"
 	"sync"
 	"time"
 
@@ -39,20 +37,6 @@ func startServer(addr chan string) {
 }
 
 func main() {
-	type T struct {
-		A int
-		B string
-	}
-	t := T{23, "skidoo"}
-	s := reflect.ValueOf(&t).Elem()
-	typeOfT := s.Type()
-	for i := 0; i < s.NumField(); i++ {
-		f := s.Field(i)
-		fmt.Printf("%d: %s %s = %v \n", i, typeOfT.Field(i).Name, f.Type(), f.Interface())
-	}
-}
-
-func test() {
 	log.SetFlags(0)
 
 	addr := make(chan string)
@@ -67,7 +51,7 @@ func test() {
 	time.Sleep(5 * time.Second)
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

@@ -537,7 +537,7 @@ type Type interface {
   * FieldAlign() int：当此类型在结构体中作为字段时，需要使用的字节数；
   * Method(int) Method：获取第 i 序位的方法；
   * MethodByName(string) (Method, bool)：查找指定名称的方法，其返回的 bool 值表示是否找到。
-  * NumMethod() int：获取类型对应的方法数量；
+  * NumMethod() int：获取类型对应的方法数量，并且是可导出方法；
   * Name() string：获取类型名字符串（附加上包路径）；
   * PkgPath() string：获取该类型值对应的包路径名；
   * Size() uintptr：返回存储该类型值所需要的内存字节数；
