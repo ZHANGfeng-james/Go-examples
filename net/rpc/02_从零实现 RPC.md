@@ -31,6 +31,15 @@ Go 语言广泛地应用于**云计算**和**微服务**，**成熟的 RPC 框�
 
 > 从上面这句内容：“GeeRPC 选择从零实现 Go 语言官方的标准库 net/rpc”，我大概知道了本文的目标。
 
+
+
+
+
+* 遇到什么问题？描述问题现状
+* 怎么解决？为什么这么解决？
+
+
+
 # 1 服务端与消息编码
 
 一个典型的 RPC 调用如下：
@@ -1670,15 +1679,365 @@ func main() {
 
 # 6 负载均衡
 
+假设有**多个服务实例**，每个实例提供**相同的功能**，为了提高整个系统的吞吐量，每个实例**部署在不同的机器上**。
 
+客户端可以**选择任意一个实例**进行调用，获取想要的结果。那如何选择呢？取决于**负载均衡**的策略。对于 RPC 框架来说，我们可以很容易想到如下策略：
 
+- **随机选择策略** - 从服务列表中随机选择一个。
+- **轮询算法(Round Robin)** - 依次调度不同的服务器，每次调度执行 i = (i + 1) mode n。
+- **加权轮询(Weight Round Robin)** - 在轮询算法的基础上，为每个服务实例设置一个权重，高性能的机器赋予更高的权重，也可以根据服务实例的当前的负载情况做动态的调整，例如考虑最近5分钟部署服务器的 CPU、内存消耗情况。
+- **哈希/一致性哈希策略** - 依据请求的某些特征，计算一个 hash 值，根据 hash 值将请求发送到对应的机器。一致性 hash 还可以解决服务实例动态添加情况下，调度抖动的问题。一致性哈希的一个典型应用场景是分布式缓存服务。
+- ...
 
+负载均衡的前提是有多个服务实例，首先实现一个最基础的**服务发现模块** Discovery：
 
+~~~go
+type SelectMode int
 
+const (
+	RandomSelect     SelectMode = iota // 随机选择
+	RoundRobinSelect                   // 轮训
+)
+
+type Discover interface {
+	GetAll() ([]string, error)
+	Update([]string) error
+	Get(mode SelectMode) (string, error)
+	Refresh() error // refresh from remote registry
+}
+~~~
+
+接口定义了服务发现实例必须具备的能力：
+
+1. Refresh 从注册中心更新服务列表
+2. Update 手动更新服务列表
+3. Get 根据负载均衡策略，选择一个服务实例
+4. GetAll 返回所有的服务实例
+
+实现一个**不需要注册中心**，服务列表**手动维护的服务发现**结构体：
+
+~~~go
+type MultiServersDiscovery struct {
+	servers []string
+
+	mu    sync.RWMutex
+	rand  *rand.Rand
+	index int
+}
+
+func NewMultiServersDiscovery(servers []string) *MultiServersDiscovery {
+	instance := &MultiServersDiscovery{
+		servers: servers,
+		rand:    rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+	instance.index = instance.rand.Intn(math.MaxInt32 - 1) // 避免每个实例都从 0 开始
+	return instance
+}
+
+func (d *MultiServersDiscovery) Refresh() error {
+	return nil
+}
+
+func (d *MultiServersDiscovery) Update(servers []string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.servers = servers
+	return nil
+}
+
+func (d *MultiServersDiscovery) Get(mode SelectMode) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	len := len(d.servers)
+	if len == 0 {
+		return "", errors.New("rpc discovery, no avaiable server")
+	}
+
+	switch mode {
+	case RandomSelect:
+		// 随机选取
+		n := d.rand.Intn(len)
+		return d.servers[n], nil
+	case RoundRobinSelect:
+		// 轮询方式选取
+		n := d.index % len // servers could be update, so mode len to ensure safety
+		d.index = (d.index + 1) % len
+		// 特别是 servers 增加的时候，可能会出现访问越界
+		return d.servers[n], nil
+	default:
+		return "", errors.New("rpc discovery, unknown select mode")
+	}
+}
+
+func (d *MultiServersDiscovery) GetAll() ([]string, error) {
+	d.mu.RLock()
+	//FIXME d.mu.Unlock()
+	defer d.mu.RUnlock()
+
+	servers := make([]string, len(d.servers), len(d.servers))
+	copy(servers, d.servers)
+
+	return servers, nil
+}
+~~~
+
+其中随机数 rand 初始化时使用时间戳设定随机数种子，避免每次产生相同的随机数序列；index 记录轮询算法的当前位置，为了避免每次从 0 开始，初始化时设定随机数。
+
+实现一个支持负载均衡的客户端（支持 2 种不同的负载均衡算法）：
+
+~~~go
+type XClient struct {
+	discover   discover.Discover
+	selectMode discover.SelectMode
+	opt        *Option
+	clients    map[string]*Client // 保留所有已和指定string(server addr)创建 net.Conn 的 *Client 实例
+	mu         sync.Mutex
+}
+
+func NewXClient(d discover.Discover, mode discover.SelectMode, opt *Option) *XClient {
+	return &XClient{
+		discover:   d,
+		selectMode: mode,
+		opt:        opt,
+		clients:    make(map[string]*Client),
+	}
+}
+
+func (xclient *XClient) Close() error {
+	xclient.mu.Lock()
+	defer xclient.mu.Unlock()
+
+	for addr, client := range xclient.clients {
+		//FIXME I have no idea how to deal with error, just ignore it.
+		_ = client.Close()
+		delete(xclient.clients, addr)
+	}
+	return nil
+}
+~~~
+
+此处实现的 XClient 和原先的 Client 在调用 RPC 的能力上是一致的，也就是说，不同之处仅仅是 XClient 是支持负载均衡的，也就是**能够从多个服务端实例中挑选出某个实例并请求**：
+
+~~~go
+// 向服务列表的某个 Server 发起请求，基于某种 discover.SelectMode
+func (xclient *XClient) Call(ctx context.Context, serviceMethod string, args, reply interface{}) error {
+	// 依据 mode 挑选出 server 端地址，取名为：rpcAddr
+	rpcAddr, err := xclient.discover.Get(xclient.selectMode)
+	Infof("XClient Call select rpcAddr:%s", rpcAddr)
+
+	if err != nil {
+		return err
+	}
+	// 调用 call
+	return xclient.call(rpcAddr, ctx, serviceMethod, args, reply)
+}
+
+func (xclient *XClient) call(rpcAddr string, ctx context.Context, serviceMethod string, args, reply interface{}) error {
+	// 依据 addr 调用 dial，并返回一个 *Client
+	client, err := xclient.dial(rpcAddr)
+	if err != nil {
+		return err
+	}
+	return client.Call(ctx, serviceMethod, args, reply)
+}
+
+func (xclient *XClient) dial(rpcAddr string) (*Client, error) {
+	xclient.mu.Lock()
+	defer xclient.mu.Unlock()
+
+	client, ok := xclient.clients[rpcAddr]
+	if ok && !client.IsAvailable() {
+		// 存在但不可用
+		_ = client.Close()
+		delete(xclient.clients, rpcAddr)
+		client = nil
+	}
+
+	if client == nil {
+		var err error
+		client, err = DialWithAddr(rpcAddr, xclient.opt)
+		if err != nil {
+			return nil, err
+		}
+		xclient.clients[rpcAddr] = client
+	}
+
+	return client, nil
+}
+~~~
+
+我们将复用 Client 的能力封装在方法 `dial` 中，dial 的处理逻辑如下：
+
+1) 检查 `xc.clients` 是否有缓存的 Client，如果有，检查是否是可用状态，如果是则返回缓存的 Client，如果不可用，则从缓存中删除。
+2) 如果步骤 1) 没有返回缓存的 Client，则说明需要创建新的 Client，缓存并返回。
+
+结构体中最重要的缓存是 Client 实例列表，表示当前状态中已和对端 Server 建立 net.Conn 的 Client 实例。
+
+对应的测试用例：
+
+~~~go
+package rpc
+
+import (
+	"context"
+	"log"
+	"net"
+	"sync"
+	"testing"
+
+	"github.com/go-examples-with-tests/net/rpc/v2/discover"
+)
+
+func runServer(addrCh chan string) {
+	var foo Foo
+	l, _ := net.Listen("tcp", ":0")
+
+	server := NewServer()
+	_ = server.Register(&foo)
+
+	addrCh <- l.Addr().String()
+
+	server.Accept(l)
+}
+
+func TestXClient(t *testing.T) {
+	addrCh1 := make(chan string)
+	addrCh2 := make(chan string)
+	addrCh3 := make(chan string)
+
+	go runServer(addrCh1)
+	go runServer(addrCh2)
+	go runServer(addrCh3)
+
+	rpcAddr := make([]string, 0)
+	rpcAddr = append(rpcAddr, <-addrCh1)
+	rpcAddr = append(rpcAddr, <-addrCh2)
+	rpcAddr = append(rpcAddr, <-addrCh3)
+
+	d := discover.NewMultiServersDiscovery([]string{
+		"tcp@" + rpcAddr[0],
+		"tcp@" + rpcAddr[1],
+		"tcp@" + rpcAddr[2]},
+	)
+
+	xclient := NewXClient(d, discover.RandomSelect, nil)
+	defer func() {
+		_ = xclient.Close()
+	}()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+			var reply int
+			args := &Args{Num1: i, Num2: i * i}
+			err := xclient.Call(context.Background(), "Foo.Sum", args, &reply)
+			if err != nil {
+				log.Printf("%s:%s, err: %v", "call", "Foo.Sum", err)
+			} else {
+				log.Printf("%s %s success: %d + %d = %d", "call", "Foo.Sum", args.Num1, args.Num2, reply)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+2021/10/10 11:29:05 new Service name:Foo
+2021/10/10 11:29:05 new Service name:Foo
+2021/10/10 11:29:05 rpc server: register Foo.Sum
+2021/10/10 11:29:05 rpc server: register Foo.Sum
+2021/10/10 11:29:05 new Service name:Foo
+2021/10/10 11:29:05 rpc server: register Foo.Sum
+[info ]2021/10/10 11:29:05 xclient.go:43: XClient Call select rpcAddr:tcp@[::]:56369
+[info ]2021/10/10 11:29:05 xclient.go:43: XClient Call select rpcAddr:tcp@[::]:56367
+[info ]2021/10/10 11:29:05 xclient.go:43: XClient Call select rpcAddr:tcp@[::]:56368
+[info ]2021/10/10 11:29:05 xclient.go:43: XClient Call select rpcAddr:tcp@[::]:56367
+[info ]2021/10/10 11:29:05 xclient.go:43: XClient Call select rpcAddr:tcp@[::]:56368
+2021/10/10 11:29:08 call Foo.Sum success: 1 + 1 = 2
+2021/10/10 11:29:08 call Foo.Sum success: 4 + 16 = 20
+2021/10/10 11:29:08 call Foo.Sum success: 2 + 4 = 6
+2021/10/10 11:29:08 call Foo.Sum success: 3 + 9 = 12
+2021/10/10 11:29:08 call Foo.Sum success: 0 + 0 = 0
+~~~
+
+启动了 3 个 Server，并发发起 5 次请求，其结果是：
+
+1. 2 次请求打在 `tcp@[::]:56367`
+2. 2 次请求打在 `tcp@[::]:56368`
+3. 1 次请求打在 `tcp@[::]:56369`
+
+**「XClient 实现广播式请求」：**
+
+~~~go
+// 向服务列表的所有 Server 发起请求
+func (xclient *XClient) Broadcast(ctx context.Context, serviceMethod string, args, reply interface{}) error {
+    // 获取到所有 Client 的 rpcAddr
+	clients, err := xclient.discover.GetAll()
+	if err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var e error
+
+	replyDone := reply == nil
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	for i := 0; i < len(clients); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			// 并发请求时，确保能够拷贝结果正常，每个 goroutine 创建新的 clonedReply
+			var clonedReply interface{}
+			if reply != nil {
+				clonedReply = reflect.New(reflect.ValueOf(reply).Elem().Type()).Interface()
+			}
+
+			err = xclient.Call(ctx, serviceMethod, args, clonedReply)
+			mu.Lock()
+			if err != nil && e == nil {
+				e = err
+				cancel() // 如果出现一次请求异常，结束所有请求
+			}
+
+			if err == nil && !replyDone {
+				reflect.ValueOf(reply).Elem().Set(reflect.ValueOf(clonedReply).Elem())
+			}
+
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	return nil
+}
+~~~
+
+Broadcast 将请求广播到所有的服务实例，如果任意一个实例发生错误，则返回其中一个错误；如果调用成功，则返回其中一个的结果。有以下几点需要注意：
+
+1) 为了提升性能，请求是并发的。
+2) 并发情况下需要使用互斥锁保证 error 和 reply 能被正确赋值。
+3) 借助 context.WithCancel 确保有错误发生时，快速失败。
 
 # 7 服务发现与注册中心
 
+![](./img/registry.png)
 
+RPC 框架中注册中心所在的位置如上图，注册中心存在的好处在于：客户端和服务端都**只需要感知注册中心的存在**，而无需感知对方的存在。更加具体一些：
 
+1. 服务端启动后，向注册中心发送注册消息，注册中心得知该服务已启动，处于可用状态。一般来说，服务端还需要定期向注册中心发送心跳，证明自己还活着。
+2. 客户端向注册中心询问，当前那些服务是可用的，注册中心将可用的服务列表返回客户端。
+3. 客户端根据注册中心得到的服务列表，选择其中一个发起调用。
 
+> 上面的图、文字，可以当作是注册中心这个**功能模型**的说明。那**如何去实现这个功能模型**？
+
+如果没有注册中心，就像上一节实现的那样，客户端需要**硬编码**服务端的地址，而且机制保证服务端是否处于可用状态。当然注册中心的功能还有很多，比如配置的动态同步、通知机制等。
+
+比较**常见的注册中心方案**有：etcd、zookeeper、consul，一般比较出名的微服务活着 RPC 框架，这些主流的注册中心都是支持的。
 

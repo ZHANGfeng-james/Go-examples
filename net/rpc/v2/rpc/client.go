@@ -10,26 +10,46 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-examples-with-tests/net/rpc/v2/codec"
 )
 
-type Call struct {
-	Seq           uint64
-	ServiceMethod string
-	Args          interface{}
-	Reply         interface{}
-	Error         error
-	Done          chan *Call
-}
+type Client struct {
+	seq uint64      // 用于给请求编号，每个请求拥有唯一编号
+	cc  codec.Codec // 消息的编解码器，序列化将要发出去的请求，反序列号接收到的响应
+	opt *Option
 
-func (call *Call) done() {
-	call.Done <- call
+	mu      sync.Mutex       // 支持对 pending 的并发读写
+	pending map[uint64]*Call // Client 被保留（未处理）的请求，format: seq-*Call
+
+	sending sync.Mutex   // 确保请求的有序发送，防止出现多个请求报文混淆
+	header  codec.Header // 请求的消息头
+
+	closing  bool // user has called Close
+	shutdown bool // server has told us to stop
 }
 
 var ErrShutdown = errors.New("connection is shut down")
+
+func DialWithAddr(rpcAddr string, opts ...*Option) (client *Client, err error) {
+	params := strings.Split(rpcAddr, "@")
+	if len(params) != 2 {
+		return nil, fmt.Errorf("rpc client, wrong format address: %s, expect: protocol@addr", rpcAddr)
+	}
+
+	network, address := params[0], params[1]
+	switch network {
+	case "tcp":
+		return Dial(network, address, opts...)
+	case "http":
+		return DialHTTP(network, address, opts...)
+	default:
+		return nil, fmt.Errorf("rpc client, wrong network protocol:%s, expect:tcp/http...", network)
+	}
+}
 
 func Dial(network, address string, opts ...*Option) (client *Client, err error) {
 	return dialTimeout(NewClient, network, address, opts...)
@@ -131,21 +151,6 @@ func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 		return nil, err
 	}
 	return newClient(f(conn), opt), nil
-}
-
-type Client struct {
-	seq uint64      // 用于给请求编号，每个请求拥有唯一编号
-	cc  codec.Codec // 消息的编解码器，序列化将要发出去的请求，反序列号接收到的响应
-	opt *Option
-
-	mu      sync.Mutex       // 支持对 pending 的并发读写
-	pending map[uint64]*Call // Client 被保留（未处理）的请求，format: seq-*Call
-
-	sending sync.Mutex   // 确保请求的有序发送，防止出现多个请求报文混淆
-	header  codec.Header // 请求的消息头
-
-	closing  bool // user has called Close
-	shutdown bool // server has told us to stop
 }
 
 func newClient(cc codec.Codec, opt *Option) *Client {
@@ -295,4 +300,10 @@ func (client *Client) Close() error {
 	}
 	client.closing = true
 	return client.cc.Close()
+}
+
+func (client *Client) IsAvailable() bool {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return !client.closing && !client.shutdown
 }
