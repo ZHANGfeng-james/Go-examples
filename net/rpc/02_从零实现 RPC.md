@@ -31,15 +31,6 @@ Go 语言广泛地应用于**云计算**和**微服务**，**成熟的 RPC 框�
 
 > 从上面这句内容：“GeeRPC 选择从零实现 Go 语言官方的标准库 net/rpc”，我大概知道了本文的目标。
 
-
-
-
-
-* 遇到什么问题？描述问题现状
-* 怎么解决？为什么这么解决？
-
-
-
 # 1 服务端与消息编码
 
 一个典型的 RPC 调用如下：
@@ -1707,7 +1698,7 @@ type Discover interface {
 }
 ~~~
 
-接口定义了服务发现实例必须具备的能力：
+接口定义了**服务发现**实例必须具备的能力：
 
 1. Refresh 从注册中心更新服务列表
 2. Update 手动更新服务列表
@@ -2040,4 +2031,338 @@ RPC 框架中注册中心所在的位置如上图，注册中心存在的好处�
 如果没有注册中心，就像上一节实现的那样，客户端需要**硬编码**服务端的地址，而且机制保证服务端是否处于可用状态。当然注册中心的功能还有很多，比如配置的动态同步、通知机制等。
 
 比较**常见的注册中心方案**有：etcd、zookeeper、consul，一般比较出名的微服务活着 RPC 框架，这些主流的注册中心都是支持的。
+
+从整个框架的角度来看，Registry 是一个独立的 Server，Client 和 Server 分别和 Registry 交互。
+
+主流的注册中心 etcd、zookeeper 等功能强大，与这类注册中心的对接代码量是比较大的，需要实现的接口很多。GeeRPC 选择自己实现**一个简单的支持心跳保活的注册中心**。
+
+~~~go
+package registry
+
+import (
+	"sync"
+	"time"
+)
+
+// 作为一个 registry，需要装载哪些字段，才能实现这个功能模型
+type GeeRegistry struct {
+	servers map[string]*ServerItem
+	timeout time.Duration // 服务需删除的时间间隔，用于保持 registry 干净、可用
+	my      sync.Mutex
+}
+
+type ServerItem struct {
+	Addr           string    // 服务实例 rpcAddr
+	aliveStartTime time.Time // 服务实例存活开始时间
+}
+
+const (
+	defaultRegistryPath = "/_geerpc_/registry"
+	defaultTimeout      = time.Minute * 5 // 5分钟之内，没有任何心跳包，表示服务不再存活
+)
+
+func NewRPCRegistry(duration time.Duration) *GeeRegistry {
+	return &GeeRegistry{
+		servers: make(map[string]*ServerItem),
+		timeout: duration,
+	}
+}
+~~~
+
+接下来实现 Registry 具备的功能：
+
+~~~go
+func (registry *GeeRegistry) putServer(rpcAddr string) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	server, ok := registry.servers[rpcAddr]
+	if !ok {
+		registry.servers[rpcAddr] = &ServerItem{Addr: rpcAddr, aliveStartTime: time.Now()}
+	} else {
+		// if exists, update alive time to keep alive 表示服务还活着！
+		server.aliveStartTime = time.Now()
+	}
+}
+
+func (registry *GeeRegistry) aliveServers() []string {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+
+	servers := make([]string, 0)
+	for rpcAddr, serverItem := range registry.servers {
+		if registry.timeout == 0 || serverItem.aliveStartTime.Add(registry.timeout).After(time.Now()) {
+			servers = append(servers, rpcAddr)
+		} else {
+			delete(registry.servers, rpcAddr) // 超时的服务
+		}
+	}
+	sort.Strings(servers)
+	return servers
+}
+~~~
+
+为 GeeRegistry 实现**添加服务实例**和**返回服务列表**的方法。
+
+- putServer：添加服务实例，如果服务已经存在，则更新 start。
+- aliveServers：返回可用的服务列表，**如果存在超时的服务，则删除**。
+
+为了实现简单，注册中心采用 HTTP 协议提供服务，且所有的有用信息都承载在 HTTP Header 中：
+
+~~~go
+func (registry *GeeRegistry) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	switch req.Method {
+	case http.MethodGet:
+		// keep it simple, server is in req.Header
+		w.Header().Set("X-Geerpc-Servers", strings.Join(registry.aliveServers(), ","))
+	case http.MethodPost:
+        // 从请求中获取 Header 部分
+		addr := req.Header.Get("X-Geerpc-Server")
+		if addr == "" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		log.Infof("registry receive heartbeat from:%s", addr)
+		registry.putServer(addr)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (registry *GeeRegistry) HandleHTTP(registryPath string) {
+	http.Handle(registryPath, registry)
+}
+
+func HandleHTTP() {
+	DefaultGeeRegistry.HandleHTTP(defaultRegistryPath)
+}
+~~~
+
+为了实现上的简单，GeeRegistry 采用 HTTP 协议提供服务，且所有的有用信息都承载在 HTTP Header 中。
+
+- Get：返回所有可用的服务列表，通过自定义字段 X-Geerpc-Servers 承载。
+- Post：添加服务实例或发送心跳，通过自定义字段 X-Geerpc-Server 承载。
+
+提供 Heartbeat 方法，便于服务启动时定时向注册中心发送心跳，默认周期比注册中心设置的过期时间少 1 min：
+
+~~~go
+package registry
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/go-examples-with-tests/database/v1/log"
+)
+
+//FIXME 心跳这种功能，应该是实现在 Server 端，还是在 Registry 端？
+func Heartbeat(registry, rpcAddr string, duration time.Duration) {
+	if duration == 0 {
+		duration = defaultTimeout - time.Duration(1)*time.Minute
+	}
+	var err error
+	err = sendHeartbeat(registry, rpcAddr) // 首次发送一次
+	go func() {
+		ticker := time.NewTicker(duration)
+		for err == nil { // 间隔 duration 持续发送
+			<-ticker.C
+			err = sendHeartbeat(registry, rpcAddr)
+		}
+	}()
+}
+
+func sendHeartbeat(registry, rpcAddr string) error {
+	log.Infof("server:%s send heartbeat signal to registry %s", rpcAddr, registry)
+	client := &http.Client{}
+	request, _ := http.NewRequest("POST", defaultRegistryPath, nil)
+	request.Header.Set("X-Geerpc-Server", rpcAddr)
+	if _, err := client.Do(request); err != nil {
+		log.Infof("rpc server: heart beat err:", err)
+		return err
+	}
+	return nil
+}
+~~~
+
+和注册中心对应的功能是：**服务发现**，下面**重新创建一个服务发现实例**
+
+~~~go
+package discover
+
+import "time"
+
+type GeeRegistryDiscovery struct {
+	*MultiServersDiscovery
+	registry string // Registry中心地址
+
+	timeout          time.Duration // 更新服务列表时间间隔
+	lastUpdateServer time.Time     // 最后一次更新服务列表的时间戳
+}
+
+const defaultUpdateTimeout = 10 * time.Second
+
+func NewGeeRegistryDiscovery(registryAddr string, duration time.Duration) *GeeRegistryDiscovery {
+	if duration == 0 {
+		duration = defaultUpdateTimeout
+	}
+
+	return &GeeRegistryDiscovery{
+		MultiServersDiscovery: NewMultiServersDiscovery(make([]string, 0)),
+		timeout:               duration,
+		registry:              registryAddr,
+	}
+}
+~~~
+
+重新创建的服务发现实例的特点是：
+
+- GeeRegistryDiscovery 嵌套了 MultiServersDiscovery，**复用原先服务发现的能力**；
+- registry 即注册中心的地址；
+- timeout 服务列表的过期时间；
+- lastUpdate 是代表最后从注册中心更新服务列表的时间，默认 10s 过期，即 10s 之后，需要从注册中心更新新的列表。
+
+接下来是实现服务发现的功能：服务发现本质上就是与 Registry 通信，让其返回可用服务的列表
+
+~~~go
+func (d *GeeRegistryDiscovery) Refresh() error { // refresh from remote registry
+	// GET 请求和 Registry 通信，获取所有可用服务列表，并更新本地缓存
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lastUpdateServer.Add(d.timeout).After(time.Now()) {
+		return nil
+	}
+
+	log.Infof("rpc registry: refresh servers from registry:%s", d.registry)
+	resp, err := http.Get(d.registry)
+	if err != nil {
+		log.Infof("rpc registry refresh err:", err)
+		return err
+	}
+
+	servers := strings.Split(resp.Header.Get("X-Geerpc-Servers"), ",")
+	d.servers = make([]string, 0, len(servers))
+	for _, s := range servers {
+		if strings.TrimSpace(s) != "" {
+			d.servers = append(d.servers, strings.TrimSpace(s))
+		}
+	}
+	d.lastUpdateServer = time.Now()
+	return nil
+}
+
+func (d *GeeRegistryDiscovery) Update(servers []string) error {
+	//FIXME 功能未知！
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.servers = servers
+	d.lastUpdateServer = time.Now()
+	return nil
+}
+
+func (d *GeeRegistryDiscovery) GetAll() ([]string, error) {
+	// 判断是否超时，若未超时，则直接返回本地缓存；否则，执行 Refresh 后返回本地缓存
+	if err := d.Refresh(); err != nil {
+		return nil, err
+	}
+	return d.MultiServersDiscovery.GetAll()
+}
+
+func (d *GeeRegistryDiscovery) Get(mode SelectMode) (string, error) {
+	// 同 GetAll
+	if err := d.Refresh(); err != nil {
+		return "", err
+	}
+	return d.MultiServersDiscovery.Get(mode)
+}
+~~~
+
+测试程序：
+
+~~~go
+package rpc
+
+import (
+	"context"
+	"log"
+	"net"
+	"net/http"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/go-examples-with-tests/net/rpc/v2/discover"
+	"github.com/go-examples-with-tests/net/rpc/v2/registry"
+)
+
+func runRegistry(wg *sync.WaitGroup) {
+	l, _ := net.Listen("tcp", ":9999")
+	registry.HandleHTTP()
+	wg.Done()
+	_ = http.Serve(l, nil)
+}
+
+func runServer(wg *sync.WaitGroup) {
+	var foo Foo
+	l, _ := net.Listen("tcp", ":0")
+
+	server := NewServer()
+	_ = server.Register(&foo)
+
+	registry.Heartbeat(registryAddr, "tcp@"+l.Addr().String(), 5*time.Second)
+	wg.Done()
+
+	server.Accept(l)
+}
+
+const registryAddr = "http://localhost:9999/_geerpc_/registry"
+
+func TestXClient(t *testing.T) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go runRegistry(&wg)
+	wg.Wait()
+
+	time.Sleep(2 * time.Second)
+
+	wg.Add(3)
+	go runServer(&wg)
+	go runServer(&wg)
+	go runServer(&wg)
+	wg.Wait()
+
+	d := discover.NewGeeRegistryDiscovery(registryAddr, 0)
+	xclient := NewXClient(d, discover.RoundRobinSelect, nil)
+	defer func() {
+		_ = xclient.Close()
+	}()
+
+	var work sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		work.Add(1)
+
+		go func(i int) {
+			defer work.Done()
+			var reply int
+			args := &Args{Num1: i, Num2: i * i}
+			// err := xclient.Call(context.Background(), "Foo.Sum", args, &reply)
+			// if err != nil {
+			// 	log.Printf("%s:%s, err: %v", "Call", "Foo.Sum", err)
+			// } else {
+			// 	log.Printf("%s %s success: %d + %d = %d", "Call", "Foo.Sum", args.Num1, args.Num2, reply)
+			// }
+
+			err := xclient.Broadcast(context.Background(), "Foo.Sum", args, &reply)
+			if err != nil {
+				log.Printf("%s:%s, err: %v", "Broadcast", "Foo.Sum", err)
+			} else {
+				log.Printf("%s %s success: %d + %d = %d", "Broadcast", "Foo.Sum", args.Num1, args.Num2, reply)
+			}
+		}(i)
+	}
+	work.Wait()
+
+	time.Sleep(10 * time.Second)
+}
+~~~
 

@@ -4,55 +4,63 @@ import (
 	"context"
 	"log"
 	"net"
+	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-examples-with-tests/net/rpc/v2/discover"
+	"github.com/go-examples-with-tests/net/rpc/v2/registry"
 )
 
-func runServer(addrCh chan string) {
+func runRegistry(wg *sync.WaitGroup) {
+	l, _ := net.Listen("tcp", ":9999")
+	registry.HandleHTTP()
+	wg.Done()
+	_ = http.Serve(l, nil)
+}
+
+func runServer(wg *sync.WaitGroup) {
 	var foo Foo
 	l, _ := net.Listen("tcp", ":0")
 
 	server := NewServer()
 	_ = server.Register(&foo)
 
-	addrCh <- l.Addr().String()
+	registry.Heartbeat(registryAddr, "tcp@"+l.Addr().String(), 5*time.Second)
+	wg.Done()
 
 	server.Accept(l)
 }
 
+const registryAddr = "http://localhost:9999/_geerpc_/registry"
+
 func TestXClient(t *testing.T) {
-	addrCh1 := make(chan string)
-	addrCh2 := make(chan string)
-	addrCh3 := make(chan string)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go runRegistry(&wg)
+	wg.Wait()
 
-	go runServer(addrCh1)
-	go runServer(addrCh2)
-	go runServer(addrCh3)
+	time.Sleep(2 * time.Second)
 
-	rpcAddr := make([]string, 0)
-	rpcAddr = append(rpcAddr, <-addrCh1)
-	rpcAddr = append(rpcAddr, <-addrCh2)
-	rpcAddr = append(rpcAddr, <-addrCh3)
+	wg.Add(3)
+	go runServer(&wg)
+	go runServer(&wg)
+	go runServer(&wg)
+	wg.Wait()
 
-	d := discover.NewMultiServersDiscovery([]string{
-		"tcp@" + rpcAddr[0],
-		"tcp@" + rpcAddr[1],
-		"tcp@" + rpcAddr[2]},
-	)
-
-	xclient := NewXClient(d, discover.RandomSelect, nil)
+	d := discover.NewGeeRegistryDiscovery(registryAddr, 0)
+	xclient := NewXClient(d, discover.RoundRobinSelect, nil)
 	defer func() {
 		_ = xclient.Close()
 	}()
 
-	var wg sync.WaitGroup
+	var work sync.WaitGroup
 	for i := 0; i < 5; i++ {
-		wg.Add(1)
+		work.Add(1)
 
 		go func(i int) {
-			defer wg.Done()
+			defer work.Done()
 			var reply int
 			args := &Args{Num1: i, Num2: i * i}
 			// err := xclient.Call(context.Background(), "Foo.Sum", args, &reply)
@@ -70,5 +78,7 @@ func TestXClient(t *testing.T) {
 			}
 		}(i)
 	}
-	wg.Wait()
+	work.Wait()
+
+	time.Sleep(10 * time.Second)
 }
