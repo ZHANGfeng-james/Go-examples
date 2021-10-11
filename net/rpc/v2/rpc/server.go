@@ -102,7 +102,7 @@ func (server *Server) ServeConn(conn io.ReadWriteCloser) {
 
 var invalidRequest = struct{}{}
 
-// 也就是一次连接中，紧接在 Option 之后的部分：Header 和 Body
+// 也就是一次连接中，紧接在 Option 之后的部分：Header 和 Body（request 结构体是在 Server 端的封装）
 type request struct {
 	h            *codec.Header // Header
 	argv, replyv reflect.Value // Body

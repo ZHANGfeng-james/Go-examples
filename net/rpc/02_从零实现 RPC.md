@@ -23,7 +23,7 @@ RPC——远程过程调用，是一种**计算机通信协议**，允许调用*
 
 > RPC 框架本质上是要解决端之间的数据通信问题。
 
-Go 语言广泛地应用于**云计算**和**微服务**，**成熟的 RPC 框架和微服务框架**汗牛充栋。`grpc`、`rpcx`、`go-micro` 等都是非常成熟的框架。一般而言，**RPC 是微服务框架的一个子集**，**微服务框架**可以自己实现 **RPC 部分**，当然，也可以选择不同的 RPC 框架作为通信基座。
+Go 语言广泛地应用于**云计算**和**微服务**，**成熟的 RPC 框架和微服务框架**汗牛充栋。`grpc`、`rpcx`、`go-micro` 等都是非常成熟的框架。一般而言，**RPC 是微服务框架的一个子集**，**微服务框架**可以自己实现 **RPC 部分**，当然，也可以选择不同的 RPC 框架作为**通信基座**。
 
 考虑性能和功能，上述成熟的框架代码量都比较庞大，而且通常和第三方库，例如 `protobuf`、`etcd`、`zookeeper` 等有比较深的耦合，难以直观地窥视**框架的本质**。GeeRPC 的目的是以最少的代码，**实现 RPC 框架中最为重要的部分**，帮助大家理解 RPC 框架在设计时需要考虑什么。代码简洁是第一位的，功能是第二位的。
 
@@ -51,7 +51,7 @@ type Header struct {
 }
 ~~~
 
-上面说的 Header 和 Body 部分就是对于一个 HTTP 通信来说的，将一个消息划分为相同的结构。ServiceMethod 是服务名和方法名，通常与 Go 语言中的结构体类型名和方法名相映射。Seq 是请求的序列号，也可以认为是某个请求的 ID，用来区分不同的请求，是有 Client 端给定。
+上面说的 Header 和 Body 部分就是对于一个 HTTP 通信（起始行、首部 Header 和通信主体 Body）来说的，将一个消息划分为相同的结构。ServiceMethod 是服务名和方法名，通常与 Go 语言中的结构体类型名和方法名相映射。Seq 是请求的序列号，也可以认为是某个请求的 ID，用来区分不同的请求，是由 Client 端给定。
 
 最终的传输内容格式设计成：
 
@@ -79,7 +79,7 @@ const (
 	JsonType Type = "application/json"
 )
 
-var NewCodecFuncMap map[Type]NewCodecFunc
+var NewCodecFuncMap map[Type]NewCodecFunc // 内存缓存
 
 func init() {
 	NewCodecFuncMap = make(map[Type]NewCodecFunc)
@@ -154,6 +154,8 @@ func (gob *GobCodec) Close() error {
 上面整个过程实现了**消息的序列化和反序列化**，也就是通过 encoding/gob 实现了 Encode/Decode 过程。
 
 客户端与服务端的通信需要**协商一些内容**，例如 HTTP 报文，**分为 Header 和 Body 部分**，body 的格式和长度通过 Header 中**的 Content-Type 和 Content-Length 指定**，服务端通过解析 Header 就能够知道如何从 body 中读取需要的信息。对于 RPC 协议来说，这部分协商是需要自主设计的。
+
+> 对于 HTTP 协议来说，HTTP 的报文首部 Header 部分给出了 Body 的相关长度和内容类型信息，用于在读取 Body 时“有理有据”，能够正确读取 Body 内容并解析出正确的结果。
 
 为了提升性能，一般在报文的最开始会规划固定的字节，来协商相关的信息。比如：第 1 个字节用来表示序列化方式，第 2 个字节表示压缩方式，第 3～6字节表示 header 的长度，7～10字节表示 body 的长度。对于 GeeRPC 来说，目前需要协商的唯一一项内容是**消息的编解码方式**：
 
@@ -384,6 +386,7 @@ func main() {
 	// 写入 Option
 	// | Option | Header1 | Body1 | Header2 | Body2 |... 写入 json 格式的 option
 	_ = json.NewEncoder(conn).Encode(rpc.DefaultOption)
+    // 由 Client 端创建一个解码器
 	cc := codec.NewGobCodec(conn)
 
 	for i := 0; i < 5; i++ {
@@ -397,7 +400,7 @@ func main() {
 		_ = cc.ReadHeader(h)
 
 		var reply string
-		_ = cc.ReadBody(&reply)
+		_ = cc.ReadBody(&reply) // 解码器读取 net.Conn 的数据
 		log.Println("reply:", reply)
 	}
 }
@@ -420,9 +423,11 @@ ant@MacBook-Pro v2 % go run main.go
 2021/10/07 15:50:21 reply: geerepc resp 4
 ~~~
 
-Client 在发出请求时，需要在消息的头部添加 Option 内容，但对于 Server 来说，写入的反馈就不需要 Option 内容了。上述测试用例中，并发 RPC 请求 Server 端的数据，其中 Option 仅在创建了 net.Conn 之后发送一次，后续不再发送。而 Header 会多次发送，对应 Body 也会多次发送。
+Client 在发出请求时，需要在消息的头部添加 Option 内容，但对于 Server 来说，写入的反馈就不需要 Option 内容了。因为 Server 端的反馈编码格式默认时和 Client 相同的。
 
-> 此处的疑问是：Body 部分的 req.argv 是如何被解析出来的？
+上述测试用例中，并发 RPC 请求 Server 端的数据，其中 Option 仅在创建了 net.Conn 之后发送一次，后续不再发送。而 Header 会多次发送，对应 Body 也会多次发送。
+
+> 此处的疑问是：Body 部分的 req.argv 是如何被解析出来的？encoding/gob 数据编码和解码的原理是怎样的？二进制数据是如何做到序列化和反序列化的？——**序列化**：将一个实例转化为二进制数据，用于保存或传输；**反序列化**：就是序列化的逆过程。
 
 # 2 支持并发与异步的客户端
 
@@ -498,7 +503,7 @@ type Client struct {
 	opt *Option
 
 	mu      sync.Mutex       // 支持对 pending 的并发读写
-	pending map[uint64]*Call // Client 被保留（未处理）的请求，format: seq-*Call
+	pending map[uint64]*Call // Client 被保留所有已发出去的的请求，format: seq-*Call
 
 	sending sync.Mutex   // 确保请求的有序发送，防止出现多个请求报文混淆
 	header  codec.Header // 请求的消息头
@@ -514,7 +519,7 @@ Client 的字段比较复杂：
 - sending 是一个互斥锁，和服务端类似，为了**保证请求的有序发送**，即**防止出现多个请求报文混淆**。
 - header 是每个请求的消息头，header 只有在请求发送时才需要，而请求发送是互斥的，因此每个客户端只需要一个，声明在 Client 结构体中可以复用。
 - seq 用于**给发送的请求编号**，每个请求拥有唯一编号。
-- pending 存储未处理完的请求，键是编号（seq 的值），值是 Call 实例。
+- pending 存储**未处理完的请求**，键是编号（seq 的值），值是 Call 实例。**每一次请求对应会创建一个 Call 实例**，也就是通过这个 pending 内存缓存，从 Server 端获取到响应后，会从 Header 中读取到 seq 值，Client 对应从 pending 中找到这个 seq 对应的 *Call 实例。因此，这就能够**与 Client 的请求形成一一对应关系了**。
 - closing 和 shutdown 任意一个值置为 true，则表示 Client 处于不可用的状态，但有些许的差别，closing 是**用户主动关闭的**，即调用 `Close` 方法，而 shutdown 置为 true 一般是**有错误发生**。
 
 启动 Client，以及创建 Client 实例：
@@ -535,7 +540,7 @@ func Dial(network, address string, opts ...*Option) (client *Client, err error) 
 			_ = conn.Close()
 		}
 	}()
-	return NewClient(conn, opt)
+	return NewClient(conn, opt) // 每个 net.Conn 可以对应创建一个 Client
 }
 
 func parseOptions(opts ...*Option) (*Option, error) {
@@ -562,7 +567,7 @@ func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 	}
 	// Client 发送给 Server 的格式：| Option | Header1 | Body1 | Header2 | Body2 |...
     // 也就是让 Server 知道 Client 当前的协议格式，一种协商措施
-	if err := json.NewEncoder(conn).Encode(opt); err != nil {
+	if err := json.NewEncoder(conn).Encode(opt); err != nil { // Client端已经把Option发出去了
 		log.Println("rpc client: options error:", err)
 		_ = conn.Close()
 		return nil, err
@@ -585,7 +590,7 @@ func newClient(cc codec.Codec, opt *Option) *Client {
 }
 ~~~
 
-创建 Client 实例时，首先需要完成一开始的协议交换，即发送 Option 信息给服务端。协商好消息的编解码方式之后，再创建一个 goroutine 调用接收 Request。
+创建 Client 实例时，首先需要**完成一开始的协议交换**，即发送 Option 信息给服务端。协商好消息的编解码方式之后，再创建一个 goroutine 调用接收 Request。
 
 Client 调用一次 RPC 请求，抽象成一个 Call 实例：
 
@@ -596,7 +601,7 @@ type Call struct {
 	Args          interface{}
 	Reply         interface{}
 	Error         error
-	Done          chan *Call
+	Done          chan *Call // 这是一个很关键的字段，用于实现同步和异步调用的结果
 }
 
 func (call *Call) done() {
@@ -604,7 +609,7 @@ func (call *Call) done() {
 }
 ~~~
 
-Call 中的所有字段，承载了一次 RPC 调用所需要的全部信息。在结构体中增加了 Done，为了支持异步调用，在获取到 RPC 反馈后，会调用 done 通知调用方。
+Call 中的所有字段，**承载了一次 RPC 调用所需要的全部信息**。在结构体中增加了 Done，为了支持异步调用，在获取到 RPC 反馈后，会调用 done 通知调用方。
 
 接下来是一系列和 Call 相关的方法：
 
@@ -708,7 +713,7 @@ func (client *Client) send(call *Call) {
 	}
 
 	client.header.ServiceMethod = call.ServiceMethod
-	client.header.Seq = seq
+	client.header.Seq = seq // 更新本次发送的 seq，用于下次创建 *Call 时
 	client.header.Error = ""
 
 	// Client 封装的 Call 发送到 Server 端
@@ -776,13 +781,13 @@ RPC 框架的一个基础能力是：像调用本地程序一样调用远程服�
 
 对 net/rpc 而言，一个函数需要能够被远程调用，需要满足如下 5 个条件：
 
-1. 方法所属的类型是可导出的，比如下述类型 `T`；
-2. 方法是可导出的；
-3. 方法有 2 个参数，都是可导出类型或内建类型；
+1. 方法所属的类型（**结构体类型**）是可导出的，比如下述类型 `T`；
+2. **方法**是可导出的；
+3. 方法有 2 个参数，都是**可导出类型或内建类型**；
 4. 方法的第二个参数是指针；
 5. 方法只有一个 error 接口类型的返回值。
 
-假设客户端发过来一个请求，包含 ServiceMethod 和 Argv：
+假设客户端发过来一个**请求部分**，包含 ServiceMethod 和 Argv：
 
 ~~~bash
 {
@@ -797,12 +802,13 @@ RPC 框架的一个基础能力是：像调用本地程序一样调用远程服�
 ...
 switch req.ServiceMethod {
     case "T.MethodName":
+	    // 这份代码给出了一个大致的思路：从Client的Request中解析出ServiceMethod
     	t := new(t)
         reply := new(T2)
-    
+    	// 解析出 Request 部分的 argv，以及 reply 的类型
         var argv T1
         gob.NewDecoder(conn).Decode(&argv)
-    
+    	// 调用 ServiceMethod 的方法，获取返回值（调用时，会设置 reply 值）
         err := t.MethodName(argv, reply)
         server.sendMessage(reply,err)
     case "Foo.Sum":
@@ -921,7 +927,7 @@ type service struct {
 func newService(receiver interface{}) *service {
 	s := new(service)
 
-	s.rcvr = reflect.ValueOf(receiver) // 这个结构体的实例
+	s.rcvr = reflect.ValueOf(receiver) // 这个结构体的实例，用于调用方法时作为第一个参数使用
 
 	s.name = reflect.Indirect(s.rcvr).Type().Name()
 	s.typ = reflect.TypeOf(receiver)
@@ -1047,9 +1053,9 @@ func TestMethodType_Call(t *testing.T) {
 
 通过反射结构体已经映射为服务，但请求的处理过程还没有完成。从接收到请求到回复还有如下步骤待实现：
 
-1. 根据入参类型，将请求的 body 反序列化；
+1. 根据入参类型，将请求的 body 反序列化（从二进制数据转换成某个对象值）；
 2. 调用 service.call 完成方法调用；
-3. 将 reply 序列化为字节流，构造响应报文。
+3. 将 reply 序列化为字节流，构造响应报文（序列化过程）。
 
 将服务的注册过程集成到 Server 中：
 
@@ -1166,6 +1172,14 @@ func (server *Server) handleRequest(cc codec.Codec, req *request, sending *sync.
 	}
 	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
 }
+
+func (server *Server) sendResponse(cc codec.Codec, h *codec.Header, body interface{}, sending *sync.Mutex) {
+	sending.Lock()
+	defer sending.Unlock()
+	if err := cc.Write(h, body); err != nil {
+		Info("rpc server: write response error:", err)
+	}
+}
 ~~~
 
 具体的：
@@ -1264,6 +1278,8 @@ func main() {
 超时处理是 RPC 框架一个比较基本的能力，如果缺少**超时处理机制**，无论是**服务端**还是**客户端**都容易因为网络或其他错误导致挂起，资源耗尽，这些问题的出现大大降低了**服务的可用性**。因此，我们需要在 RPC 框架中加入超时处理的能力。
 
 纵观整个远程调用的过程，**需要客户端处理超时**的地方有：与服务端建立连接；发送请求到服务端，写报文时；等待服务端处理，等待处理，而服务端因为某些原因已宕机，无法响应；从服务端接收响应结果，读报文。**需要服务端处理超时**的地方有：读取客户端请求报文；调用映射服务的方法，处理报文导致超时异常；发送响应报文，写报文导致超时。
+
+这些超时处理的地方，实际上都是站在一次 Request 的角度出发来认识这个问题的。也就是从发出一个 Request 到接收到响应的整个过程中，哪些地方可能会出现超时。
 
 **「客户端处理连接超时」**：
 
@@ -1585,7 +1601,7 @@ func (server *Server) ServeHTTP(rw http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	conn, _, err := rw.(http.Hijacker).Hijack()
+	conn, _, err := rw.(http.Hijacker).Hijack() // 关键是要拿到本次的 net.Conn
 	if err != nil {
 		log.Print("rpc hijacker, remote:", request.RemoteAddr, ": ", err.Error())
 		return
@@ -1620,7 +1636,7 @@ func NewClientHTTP(conn net.Conn, opt *Option) (*Client, error) {
 }
 ~~~
 
-其关键部分就是，Client 执行 Dial 后，向 net.Conn 写入符合 HTTP 协议的 「起始行/Header/Body」部分，使用的是 CONNECT 方法。同时，接收 Server 端的指定反馈，最后转换到 RPC 协议上，和之前完全一样。
+其关键部分就是，Client 执行 Dial 后，向 net.Conn 写入**符合 HTTP 协议的 「起始行/Header/Body」部分**，使用的是 CONNECT 方法。同时，接收 Server 端的指定反馈，最后转换到 RPC 协议上，和之前完全一样。
 
 测试程序：
 
@@ -2022,19 +2038,15 @@ Broadcast 将请求广播到所有的服务实例，如果任意一个实例发�
 
 RPC 框架中注册中心所在的位置如上图，注册中心存在的好处在于：客户端和服务端都**只需要感知注册中心的存在**，而无需感知对方的存在。更加具体一些：
 
-1. 服务端启动后，向注册中心发送注册消息，注册中心得知该服务已启动，处于可用状态。一般来说，服务端还需要定期向注册中心发送心跳，证明自己还活着。
-2. 客户端向注册中心询问，当前那些服务是可用的，注册中心将可用的服务列表返回客户端。
+1. 服务端启动后，向注册中心（已启动完毕）发送注册消息，注册中心得知该服务已启动，处于可用状态。一般来说，服务端还需要定期向注册中心发送心跳，证明自己还活着。
+2. 客户端向注册中心询问，当前哪些服务是可用的，注册中心将可用的服务列表返回客户端。
 3. 客户端根据注册中心得到的服务列表，选择其中一个发起调用。
 
 > 上面的图、文字，可以当作是注册中心这个**功能模型**的说明。那**如何去实现这个功能模型**？
 
-如果没有注册中心，就像上一节实现的那样，客户端需要**硬编码**服务端的地址，而且机制保证服务端是否处于可用状态。当然注册中心的功能还有很多，比如配置的动态同步、通知机制等。
+如果没有注册中心，就像上一节实现的那样，客户端需要**硬编码**服务端的地址，而且没有机制保证服务端处于可用状态。当然注册中心的功能还有很多，比如配置的动态同步、通知机制等。比较**常见的注册中心方案**有：etcd、zookeeper、consul，一般比较出名的微服务或者 RPC 框架，这些主流的注册中心都是支持的。
 
-比较**常见的注册中心方案**有：etcd、zookeeper、consul，一般比较出名的微服务活着 RPC 框架，这些主流的注册中心都是支持的。
-
-从整个框架的角度来看，Registry 是一个独立的 Server，Client 和 Server 分别和 Registry 交互。
-
-主流的注册中心 etcd、zookeeper 等功能强大，与这类注册中心的对接代码量是比较大的，需要实现的接口很多。GeeRPC 选择自己实现**一个简单的支持心跳保活的注册中心**。
+主流的注册中心 etcd、zookeeper 等功能强大，与这类注册中心的对接代码量是比较大的，需要实现的接口很多。GeeRPC 选择自己实现**一个简单的支持心跳保活的注册中心**。**从整个框架的角度来看，Registry 是一个独立的 Server，Client 和 Server 分别和 Registry 交互**。
 
 ~~~go
 package registry
@@ -2183,6 +2195,8 @@ func sendHeartbeat(registry, rpcAddr string) error {
 	return nil
 }
 ~~~
+
+关于心跳功能的实现，Server 端会调用此处的 Heartbeat 函数实现和 Registry 的通信，time.Ticker 的 goroutine 是运行在 Server 端的进程中。如果某种常见中，Server 端的进程被 kill，其中运行的 goroutine 也会停止运行，心跳会停止。
 
 和注册中心对应的功能是：**服务发现**，下面**重新创建一个服务发现实例**
 

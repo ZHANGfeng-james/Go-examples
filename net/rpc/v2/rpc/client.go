@@ -23,7 +23,7 @@ type Client struct {
 	opt *Option
 
 	mu      sync.Mutex       // 支持对 pending 的并发读写
-	pending map[uint64]*Call // Client 被保留（未处理）的请求，format: seq-*Call
+	pending map[uint64]*Call // Client 被保留所有已发出去的的请求，format: seq-*Call
 
 	sending sync.Mutex   // 确保请求的有序发送，防止出现多个请求报文混淆
 	header  codec.Header // 请求的消息头
@@ -286,7 +286,7 @@ func (client *Client) registerCall(call *Call) (uint64, error) {
 	if client.closing || client.shutdown {
 		return 0, ErrShutdown
 	}
-	call.Seq = client.seq
+	call.Seq = client.seq // 更新本次注册的 *Call 实例中的 seq 字段
 	client.pending[call.Seq] = call
 	client.seq++
 	return call.Seq, nil

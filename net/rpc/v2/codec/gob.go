@@ -8,7 +8,7 @@ import (
 )
 
 type GobCodec struct {
-	conn io.ReadWriteCloser
+	conn io.ReadWriteCloser // 保存了 net.Conn 实例，保存每一次连接
 	buf  *bufio.Writer
 	dec  *gob.Decoder
 	enc  *gob.Encoder
