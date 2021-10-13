@@ -1,0 +1,16 @@
+syntax="proto3";
+
+package protopb;
+
+option go_package="../protopb";
+
+message Request{
+    
+}
+
+message Response{
+    string name = 1;
+    int32 age = 2;
+}
+
+// no service
