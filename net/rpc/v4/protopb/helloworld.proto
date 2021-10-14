@@ -5,7 +5,7 @@ option go_package="github.com/go-examples-with-tests/net/rpc/v4/protopb";
 package protopb;
 
 message HelloRequest{
-    string name = 1;
+    optional string name = 1;
 }
 
 message HelloReply{

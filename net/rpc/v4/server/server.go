@@ -18,6 +18,11 @@ type server struct {
 }
 
 func (s *server) SayHello(ctx context.Context, req *protopb.HelloRequest) (*protopb.HelloReply, error) {
+	// 如果 Client 给定的 HelloRequest 是 nil，则表示 Client 根本没有传入
+	if req.Name == nil {
+		return &protopb.HelloReply{Message: "nobody"}, nil
+	}
+	// 此处处理的情况，包括 HelloRequest 传入的 req.Name 是空字符串的情况
 	log.Printf("Received: %s", req.GetName())
 	return &protopb.HelloReply{Message: "Hello " + req.GetName()}, nil
 }

@@ -29,12 +29,13 @@ func main() {
 	if len(os.Args) > 1 {
 		name = os.Args[1]
 	}
+	log.Printf("name:%s", name)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	// 调用 GreeterClient 实例的方法，和在本地调用方法是一样的，这就是 RPC 带来的便捷
-	reply, err := c.SayHello(ctx, &protopb.HelloRequest{Name: name})
+	reply, err := c.SayHello(ctx, &protopb.HelloRequest{Name: &name})
 	if err != nil {
 		log.Fatalf("could not greet:%v", err)
 	}
