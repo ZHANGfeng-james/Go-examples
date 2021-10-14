@@ -132,3 +132,125 @@ func main() {
 
 # 2 gRPC
 
+使用 proto 文件定义服务以及 message：
+
+~~~go
+syntax="proto3";
+
+option go_package="github.com/go-examples-with-tests/net/rpc/v4/protopb";
+
+package protopb;
+
+message HelloRequest{
+    string name = 1;
+}
+
+message HelloReply{
+    string message = 1;
+}
+
+// The greeting service definition
+service Greeter {
+    // send a greeting
+    rpc SayHello(HelloRequest) returns (HelloReply){}
+}
+~~~
+
+其中 `go_package` 是导包路径，对应的 protoc 编译指令：`protoc -I. --go_out=plugins=grpc:$GOPATH/src helloworld.proto` 对应会在 `$GOPATH/src` 目录下生成 `helloworld.pb.go` 文件。
+
+特别注意，此处**我们定义了一个 service，也就是一个服务**。
+
+服务端代码实现：
+
+~~~go
+package main
+
+import (
+	"context"
+	"log"
+	"net"
+
+	"github.com/go-examples-with-tests/net/rpc/v4/protopb"
+	"google.golang.org/grpc"
+)
+
+const (
+	port = ":50051"
+)
+
+type server struct {
+	protopb.UnimplementedGreeterServer
+}
+
+func (s *server) SayHello(ctx context.Context, req *protopb.HelloRequest) (*protopb.HelloReply, error) {
+	log.Printf("Received: %s", req.GetName())
+	return &protopb.HelloReply{Message: "Hello " + req.GetName()}, nil
+}
+
+func main() {
+	lis, err := net.Listen("tcp", port)
+	if err != nil {
+		log.Fatalf("failed to listen:%s", port)
+	}
+
+	// 创建一个 gRPC Server 实例
+	s := grpc.NewServer()
+    // *grpc.Server 和 service 关联
+	protopb.RegisterGreeterServer(s, &server{})
+	if err := s.Serve(lis); err != nil {
+		log.Fatalf("falied to serve:%v", err)
+	}
+}
+~~~
+
+在 .proto 文件中定义的 service，在 Server 端的用处：在创建 *grpc.Server 之后，需要让这个实例和 service 关联起来，也就是 Client 的请求会让这个 *grpc.Server 处理。
+
+客户端代码实现：
+
+~~~go
+package main
+
+import (
+	"context"
+	"log"
+	"os"
+	"time"
+
+	"github.com/go-examples-with-tests/net/rpc/v4/protopb"
+	"google.golang.org/grpc"
+)
+
+const (
+	port = ":50051"
+)
+
+func main() {
+	// 监听指定 port，获得一个 *grpc.ClientConn 实例
+	conn, err := grpc.Dial(port, grpc.WithInsecure(), grpc.WithBlock())
+	if err != nil {
+		log.Fatalf("dial addr: %s error", port)
+	}
+	defer conn.Close()
+
+	// 使用这个 *grpc.ClientConn 实例，创建指定的 GreeterClient 实例
+	c := protopb.NewGreeterClient(conn)
+
+	name := "world"
+	if len(os.Args) > 1 {
+		name = os.Args[1]
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// 调用 GreeterClient 实例的方法，和在本地调用方法是一样的，这就是 RPC 带来的便捷
+	reply, err := c.SayHello(ctx, &protopb.HelloRequest{Name: name})
+	if err != nil {
+		log.Fatalf("could not greet:%v", err)
+	}
+	log.Printf("Get reply:%s", reply.GetMessage())
+}
+~~~
+
+`c := protopb.NewGreeterClient(conn)` 相当于创建了客户端 Stub。在生成的 `.pb.go` 文件中，通过 `NewGreeterClient` 函数就能创建和 server 对应的 Client 实例，通过这个实例就能请求对应的 RPC 方法。
+
