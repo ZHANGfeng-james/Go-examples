@@ -1,7 +1,3 @@
-
-
-
-
 ### 使用 io 包下的 Copy 函数
 
 参考代码：./v3/copy_file.go
