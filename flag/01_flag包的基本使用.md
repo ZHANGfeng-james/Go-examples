@@ -1,4 +1,6 @@
-Go 中的 flag 包，其用途是解析 command-line 标识符的值。
+Go 中的 flag 包，其用途是**解析 command-line 标识符的值**。
+
+> 解析：parse
 
 # 1 使用方法
 
@@ -10,24 +12,82 @@ go run main.go -name 1
 
 在运行程序中获取到 Command Line 输入的参数 `-name`，经过解析得到了 key-value，即为：`name=1`。
 
+> 如果命令行中输入参数，但是程序中**并没有定义该参数**。此时应用程序会提示：`flag provided but not defined: -name` 意思就是说，**程序中并没有定义**。**程序不会正常运行！**
+
 使用 flag 包**定义标识符**，可以使用 flag.String()、flag.Bool() 或者 flag.Int() 等。
 
 如下声明了一个名为 n 的 int 类型标识符，并将解析后的值存在 `nFlag` 变量中，其类型是 `*int`：
 
 ~~~go
 func main() {
-	var nFlag = flag.Int("n", 0, "param n value")
-	flag.Parse()
-	fmt.Println("n:", *nFlag)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	var nFlag = flag.Int("n", 0, "flag param n value") // 在程序中定义标识符，名称为 n
+
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+	log.Printf("nFlag:%d", *nFlag) // 使用 log 包功能输出日志
 }
 ~~~
 
-同样，可以使用如下这种，将命令行参数绑定到指定的变量上：
+`flag.Int` 函数包含 3 个参数，其中默认值 defVal 表示如果在命令行中并没有指定该参数，则该值就是默认的值。
+
+同样，可以使用如下这种，**将命令行参数绑定到指定的变量上**：
 
 ~~~go
-var name string
-flag.StringVar(&name, "user", "Michoi", "param name value")
+func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	var nFlag = flag.Int("n", 0, "flag param n value")
+
+	var nameFlag string
+	flag.StringVar(&nameFlag, "name", "Katyusha", "name of company")
+
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+	log.Printf("nFlag:%d, nameFlag:%s", *nFlag, nameFlag)
+}
 ~~~
+
+在上述定义的 int 和 string 类型的命令行参数中，可有如下**命令行输入形式**，均能让 flag 解析出给定的参数值：
+
+1. `go run usage.go -n 1 -name Arthur`
+2. `go run usage.go -n 1 -name "Arthur"`
+3. `go run usage.go -n 1 -name="Arthur"` 同样的，对 int 类型的参数也是一样的。
+
+**对于 bool 类型的参数**，有不同输入形式：
+
+~~~go
+package main
+
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+)
+
+func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	var nFlag = flag.Int("i", 0, "flag param n value")
+
+	var nameFlag string
+	flag.StringVar(&nameFlag, "s", "Katyusha", "name of company")
+
+	var boolFlag bool
+	flag.BoolVar(&boolFlag, "b", false, "whether or not") // bool 类型的
+
+	if !flag.Parsed() {
+		flag.Parse()
+	}
+	log.Printf("nFlag:%d, nameFlag:%s, boolFlag:%v", *nFlag, nameFlag, boolFlag)
+}
+~~~
+
+输入命令：`go run usage.go -b` 就表示已给定了参数，其参数值为 true，不需要在其后加上 true 值！
 
 或者，也可以**创建自定义的标识结构体类型**，同时实现 Value 接口，即可以创建自定义结构的命令行标识符：
 
@@ -49,7 +109,7 @@ var car CarInfo
 flag.Var(&car, "carinfo", "param car info")
 ~~~
 
-如果在进程中定义了某个标识符，但是实际运行时并没有在 Command Line 中输入该标识符，此时进程中与该标识符绑定的变量值就是其默认值。
+如果在进程中**定义了某个标识符**，但是实际运行时并没有在 Command Line 中输入该标识符，此时进程中与该标识符绑定的变量值**就是其默认值**。
 
 在所有标识符都定义完后，接下来就可以调用 `flag.Parse()`，即为：**解析**命令行参数，并**赋值**到对应的变量中。
 
@@ -64,6 +124,10 @@ PS G:\michoi> go run main.go 123 true
 [123 true]
 ~~~
 
+**P.S.**
+
+一定记得要在命名行标识符定义完成**之后**再调用 `flag.Parse()`，以此触发命令行参数的解析。其作用相当于是，让 flag 包的程序预先知道应用程序需要解析哪些命令行参数（这就是**定义命令行标识符**的含义）。
+
 # 2 命令行参数语法
 
 允许如下语法：
@@ -71,16 +135,18 @@ PS G:\michoi> go run main.go 123 true
 ~~~bash
 -flag
 -flag=x
--flag x  // non-boolean flags only
+-flag x  // non-boolean flags only，bool 类型的参数值不允许这种形式
 ~~~
 
-也就是说，非 bool 类型可以使用上述 3 种形式，bool 类型仅能使用前 2 种形式。可以使用 `-` 或者 `--` 形式，是等价的。
+也就是说，非 bool 类型可以使用上述 3 种形式，bool 类型仅能使用前 2 种形式。**可以使用 `-` 或者 `--` 形式**，是等价的。
 
-对于整型值的标识符参数，允许 1234、0664、0x1234 以及负数值，对应的就是十进制、八进制和十六进制格式；对于 bool 类型值，允许：
+对于整型值的标识符参数，允许 1234、0664、0x1234 以及负数值，对应的就是十进制、八进制和十六进制格式；**对于 bool 类型值**，允许：
 
 ~~~bash
 1, 0, t, f, T, F, true, false, TRUE, FALSE, True, False
 ~~~
+
+也就是说，对于 bool 类型的值，使用上述所有的值都是可以为 bool 类型的命令行参数赋值的。
 
 对于 Duration 类型的标识符参数，允许的值是从 `time.ParseDuration` 返回的值。
 
@@ -116,9 +182,9 @@ The commands are:
         vet         report likely mistakes in packages
 ~~~
 
-比如上述命令格式 `go <command> [arguments]` 其中的 command 就是子命令，因此 bug 和 build 就是不同功能的子命令。go 程序在运行时，会首先识别出对应的子命令，紧接着再去解析子命令之后的参数。
+比如上述命令格式 `go <command> [arguments]` 其中的 command 就是**子命令**，因此 bug 和 build 就是**不同功能的子命令**。go 程序在运行时（**go 相当于是一个应用程序**），会首先**识别出对应的子命令**，紧接着**再去解析子命令之后的参数**。
 
-# 3 示例程序
+# 3 Flag 使用示例程序
 
 ~~~go
 package main
@@ -156,7 +222,7 @@ PS G:\GoUsage> go run main.go -gopher_type="Rocket" -g="rocket" -species "Gopher
 rocket ,  Gopher
 ~~~
 
-自定义的类型的标识符参数解析：
+**自定义类型**的标识符参数解析：
 
 ~~~go
 package main
@@ -180,7 +246,7 @@ func (i *interval) Set(value string) error {
 		return errors.New("interval flag alread set")
 	}
 
-	for _, dt := range strings.Split(value, ",") {
+	for _, dt := range strings.Split(value, ",") { // 按照输入的格式解析参数
 		duration, err := time.ParseDuration(dt)
 		if err != nil {
 			return err
@@ -206,7 +272,63 @@ PS G:\GoUsage> go run main.go -deltaT 10s,15s
 
 `func (i *interval) Set(value string)` 的入参，如果给定的命令行是 `go run main.go -deltaT 10s,15s`，则 value 值就是：`10s,15s`。
 
-# 4 其他方式获取参数
+# 4 FlagSet 的使用示例
+
+我们来看一个最简单的实例：
+
+~~~go
+package main
+
+import (
+	"flag"
+	"fmt"
+)
+
+func main() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+
+	// 实际的作用就是取到 flag.Args，使用默认的 FlagSet
+	flag.Parse()
+
+	var name string
+
+	goCmd := flag.NewFlagSet("go", flag.ExitOnError)       // 创建 name 为 go 的 FlagSet
+	goCmd.StringVar(&name, "name", "Go语言", "help message") // goCmd 这个 FlagSet 中为 name 变量预解析参数标识符
+
+	javaCmd := flag.NewFlagSet("java", flag.ExitOnError)
+	javaCmd.StringVar(&name, "name", "Java语言", "help message") // javaCmd 这个 FlagSet 中为 name 变量预解析参数标识符
+
+	// 取到 os.Args[1:] 的命令行参数
+	args := flag.Args()
+	if len(args) <= 0 {
+		return
+	}
+	fmt.Printf("%d, %v\n", len(args), args)
+
+	// 匹配到对应的子命令
+	switch args[0] {
+	case "go":
+		// 解析接下来的命令行参数
+		_ = goCmd.Parse(args[1:])
+	case "java":
+		_ = javaCmd.Parse(args[1:])
+	}
+
+	fmt.Printf("name=%q\n", name)
+}
+~~~
+
+这就是 FlagSet 的另一个用途：创建**子命令**。实际上 `flag.Parse()` 在上述示例程序中只有一个作用，就是获取到 `flag.Args[]`。在使用 FlagSet 中，最重要的是 `flagSet.Parse(args[1:])`，**触发这个 flagSet 解析命令行参数**。对应的命令行输入内容是：
+
+~~~bash
+ant@MacBook-Pro v1 % go run usage.go go -name=Katyusha
+2, [go -name=Katyusha]
+name="Katyusha"
+~~~
+
+其中 go 是一个子命令，作为一个 FlagSet，其解析的开始部分就是 `args[1:]`，也就是根据命令行参数的 `go` 内容，**作为一个起始部分开始解析这个指定的子命令**。
+
+# 5 其他方式获取参数
 
 通过前面，我们已经知道了 Command Line 标识符参数的获取、解析方式，这是一种获取参数的方法。
 
@@ -222,7 +344,7 @@ import (
 )
 
 func main() {
-	flag.Parse()
+    flag.Parse() // 必须要调用 flag.Parse()
 
 	flags := flag.Args()
 	fmt.Println(flags)
@@ -231,9 +353,18 @@ PS G:\GoUsage> go run main.go 123 true
 [123 true]
 ~~~
 
-对于**非标识符参数**，也就是在标识符参数之后附加的一些值，可直接通过 `flag.Args()` 获取到。
+对于**非标识符参数**，也就是**在标识符参数之后**附加的一些值，可直接通过 `flag.Args()` 获取到。`flag.Args()` 的返回结果是在命令行参数解析完成之后剩下的部分：
 
-还有一种方式也能够获取到非标识符参数：
+~~~go
+ant@MacBook-Pro v1 % go run usage.go -i 20 -s michoi -b true 1
+2021/10/16 11:02:08 usage.go:24: nFlag:20, nameFlag:michoi, boolFlag:true
+2021/10/16 11:02:08 usage.go:27: [/var/folders/3w/0pprfk1x13lfrt7vdxryd75r0000gn/T/go-build460835673/b001/exe/usage -i 20 -s michoi -b true 1]
+2021/10/16 11:02:08 usage.go:30: [true 1]
+~~~
+
+`[true 1]` 就是 `flag.Parse()` 指定的**剩下部分**。
+
+还有一种方式也能够获取到**非标识符参数**：
 
 ~~~go
 package main
@@ -251,14 +382,22 @@ PS G:\GoUsage> go run main.go 123 true
 size:3, Parameters: [123 true]
 ~~~
 
-# 5 命令行参数解析原理
+`os.Args` 获取到的是所有参数内容，比如：命令行参数和非选项参数。其返回值类型是 `[]string`，首个元素是应用程序进程，紧接着的就是所有的参数。比如：
+
+~~~go
+ant@MacBook-Pro v1 % go run usage.go -i 20 -s michoi -b true 1
+2021/10/16 10:58:54 usage.go:24: nFlag:20, nameFlag:michoi, boolFlag:true
+2021/10/16 10:58:54 usage.go:27: [/var/folders/3w/0pprfk1x13lfrt7vdxryd75r0000gn/T/go-build805321147/b001/exe/usage -i 20 -s michoi -b true 1]
+~~~
+
+本质上来说，标准库 flag 的命令行参数解析的数据来源也是 `os.Args`。
+
+# 6 命令行参数解析原理
 
 回答如下疑问：
 
-1. 为什么会出现类似 `flag provided but not defined: -name` 错误，如何产生第 6 章的 2 种错误的？
+1. 为什么会出现类似 `flag provided but not defined: -name` 错误（**程序不会正常运行**），如何产生第 6 章的 2 种错误的？
 2. flag 标准库到底是如何解析出命令行参数的？
-
-## 5.1 默认 CommandLine
 
 从最简单的 flag 标准库的使用 Demo 开始分析：
 
@@ -625,60 +764,9 @@ func (f *FlagSet) parseOne() (bool, error) {
 
 从概念范围来看，从大到小依次是：FlagSet -- Flag -- Value，也就是标识符集合（比如 main.go）、标识符（比如 -name）、具体的参数值（比如 -name="Katyusha"）。
 
-## 5.2 FlagSet
+# 7 错误解决
 
-我们来看一个最简单的实例：
-
-~~~go
-package main
-
-import (
-	"flag"
-	"fmt"
-)
-
-func main() {
-	// 实际的作用就是取到 flag.Args
-	flag.Parse()
-
-	var name string
-    // 创建 name 为 go 的 FlagSet
-	goCmd := flag.NewFlagSet("go", flag.ExitOnError)
-    // 在 goCmd 这个 FlagSet 中为 name 变量预解析参数标识符
-	goCmd.StringVar(&name, "name", "Go语言", "help message")
-    
-    // 创建 name 为 java 的 FlagSet
-	javaCmd := flag.NewFlagSet("java", flag.ExitOnError)
-    // 在 javaCmd 这个 FlagSet 中为 name 变量预解析参数标识符
-	javaCmd.StringVar(&name, "name", "Java语言", "help message")
-    
-    // name 这个变量此时已经有默认值: Java语言
-
-    // 取到 os.Args[1:] 的命令行参数
-	args := flag.Args()
-	if len(args) <= 0 {
-		return
-	}
-	fmt.Printf("%d, %v\n", len(args), args)
-
-    // 匹配到对应的子命令
-	switch args[0] {
-	case "go":
-        // 解析接下来的命令行参数
-		_ = goCmd.Parse(args[1:])
-	case "java":
-		_ = javaCmd.Parse(args[1:])
-	}
-
-	fmt.Printf("name=%q\n", name)
-}
-~~~
-
-这就是 FlagSet 的另一个用途：创建子命令。实际上 `flag.Parse()` 在上述示例程序中只有一个作用，就是获取到 `flag.Args[]`
-
-# 6 错误解决
-
-## 6.1 flag provided but not defined
+## 7.1 flag provided but not defined
 
 在初次使用时，遇到了错误：
 
@@ -709,6 +797,8 @@ func main() {
 ~~~
 
 源代码是很简单的，但就是在 `flag.Parse()` 中报错！原因是：**程序在执行 `flag.Parse()` 检测到了 `-name` 这个标志位，但是进程中并没有定义这个名为 `name` 的标识符（这种情况不被允许）** 。反之，如果在执行时，没有给定已在程序解析的标识符，此时标识符对应的变量就被赋予其默认值，也就是说，这种情况是**被允许的**。因此，如果想要在进程中解析出**命令行中已给出的标识符**，就应该在进程中定义该标识符，比如定义名为 name 这个标识符。否则，程序会报错。
+
+## 7.2 flag 没有正常被解析
 
 还有另外一种情况：
 
@@ -750,7 +840,7 @@ exit status 2
 
 也就是说，flag 标准库无法检查到程序中已注册的命令行标识符 -name 标识，和第一种情况是相同的报错提示。
 
-错误的原因是，`flag.Parse()` 函数调用顺序错误！正确的调用顺序是：
+错误的原因是，`flag.Parse()` 函数调用顺序错误！**正确的调用顺序**是：
 
 ~~~go
 package main
