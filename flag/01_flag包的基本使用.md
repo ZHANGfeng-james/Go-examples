@@ -150,41 +150,7 @@ PS G:\michoi> go run main.go 123 true
 
 对于 Duration 类型的标识符参数，允许的值是从 `time.ParseDuration` 返回的值。
 
-FlagSet 允许定义**标识符参数集合**，比如：**子命令参数**的定义。
-
-我们拿 Go 作为例子，说明何为子命令：
-
-~~~go
-Go is a tool for managing Go source code.
-
-Usage:
-
-        go <command> [arguments]
-
-The commands are:
-
-        bug         start a bug report
-        build       compile packages and dependencies
-        clean       remove object files and cached files
-        doc         show documentation for package or symbol
-        env         print Go environment information
-        fix         update packages to use new APIs
-        fmt         gofmt (reformat) package sources
-        generate    generate Go files by processing source
-        get         add dependencies to current module and install them
-        install     compile and install packages and dependencies
-        list        list packages or modules
-        mod         module maintenance
-        run         compile and run Go program
-        test        test packages
-        tool        run specified go tool
-        version     print Go version
-        vet         report likely mistakes in packages
-~~~
-
-比如上述命令格式 `go <command> [arguments]` 其中的 command 就是**子命令**，因此 bug 和 build 就是**不同功能的子命令**。go 程序在运行时（**go 相当于是一个应用程序**），会首先**识别出对应的子命令**，紧接着**再去解析子命令之后的参数**。
-
-# 3 Flag 使用示例程序
+# 3 Flag 示例程序
 
 ~~~go
 package main
@@ -318,7 +284,7 @@ func main() {
 }
 ~~~
 
-这就是 FlagSet 的另一个用途：创建**子命令**。实际上 `flag.Parse()` 在上述示例程序中只有一个作用，就是获取到 `flag.Args[]`。在使用 FlagSet 中，最重要的是 `flagSet.Parse(args[1:])`，**触发这个 flagSet 解析命令行参数**。对应的命令行输入内容是：
+这就是 FlagSet 的另一个用途：**为指定的名称创建一个 Flag 集合**。实际上 `flag.Parse()` 在上述示例程序中只有一个作用，就是获取到 `flag.Args[]`。在使用 FlagSet 中，最重要的是 `flagSet.Parse(args[1:])`，**触发这个 flagSet 解析命令行参数**。对应的命令行输入内容是：
 
 ~~~bash
 ant@MacBook-Pro v1 % go run usage.go go -name=Katyusha
@@ -326,7 +292,9 @@ ant@MacBook-Pro v1 % go run usage.go go -name=Katyusha
 name="Katyusha"
 ~~~
 
-其中 go 是一个子命令，作为一个 FlagSet，其解析的开始部分就是 `args[1:]`，也就是根据命令行参数的 `go` 内容，**作为一个起始部分开始解析这个指定的子命令**。
+其中 go 是一个 FlagSet，其解析的开始部分就是 `args[1:]`，也就是根据命令行参数的 `go` 内容，**作为一个起始部分开始解析这个指定的 FlagSet 对应的 Flag**。
+
+> go 或者是 java 是一个 FlagSet，其等价于在 Flag 示例程序中以进程名命名的 FlaSet。在使用时，不同之处是：触发 FlagSet 执行解析参数的入参是不同的。对于 go 这样的 FlagSet 需要自行给定入参，比如：`goCmd.Parse(args[1:])`
 
 # 5 其他方式获取参数
 
@@ -481,12 +449,10 @@ func NewFlagSet(name string, errorHandling ErrorHandling) *FlagSet {
 
 首先需要**弄清楚的是 2 个概念**：
 
-1. **FlagSet**：可以看做是一个标识符的集合，这个集合对应的结构体就是 FlagSet 的各个字段内容，比如 args 就是对应的参数。此处，可以看做是命令、子命令集合；
+1. **FlagSet**：可以看做是**一个标识符的集合**，这个集合对应的结构体就是 FlagSet 的各个字段内容，比如 args 就是对应的参数。
 2. **CommandLine 变量**：默认的 FlagSet。从其初始化来看，使用了 `os.Args[0]` 这个名字作为 FlagSet 的名称。而且 `os.Args[0]` 对应的就是当前运行进程的绝对路径，比如 `C:\Users\ADMINI~1\AppData\Local\Temp\go-build3140955443\b001\exe\main.exe`。
 
-依据初始化内容，我们实际上可以看出 CommandLine 默认构造的就是以自己进程名的 FlagSet，这个实例时默认创建的。
-
-依据 Demo 程序，紧接着的就是**预解析（绑定）**对应名称的**标识符参数**：
+依据初始化内容，我们实际上可以看出 CommandLine 默认构造的就是以自己进程名的 FlagSet，这个实例时默认创建的。依据 Demo 程序，紧接着的就是**预解析（绑定）**对应名称的**标识符参数**：
 
 ~~~go
 // String defines a string flag with specified name, default value, and usage string.
@@ -506,6 +472,7 @@ func (f *FlagSet) String(name string, value string, usage string) *string {
 // StringVar defines a string flag with specified name, default value, and usage string.
 // The argument p points to a string variable in which to store the value of the flag.
 func (f *FlagSet) StringVar(p *string, name string, value string, usage string) {
+    // 将定义的 Flag 加入到默认的 FlaSet 中去，相当于是内存缓存
 	f.Var(newStringValue(value, p), name, usage)
 }
 
@@ -566,7 +533,7 @@ func (f *FlagSet) Var(value Value, name string, usage string) {
 	if f.formal == nil {
 		f.formal = make(map[string]*Flag)
 	}
-    // 每次预解析一个 flag，都会将 name 加入到 f.formal 中
+    // 每次预解析一个 flag，都会将 name 加入到 f.formal 中，作为内存缓存
 	f.formal[name] = flag
 }
 
@@ -763,6 +730,20 @@ func (f *FlagSet) parseOne() (bool, error) {
 我们从上述整个过程看到了标识符参数的**预解析（绑定）** formal，还看到真实的**解析**过程 actual。
 
 从概念范围来看，从大到小依次是：FlagSet -- Flag -- Value，也就是标识符集合（比如 main.go）、标识符（比如 -name）、具体的参数值（比如 -name="Katyusha"）。
+
+上面是从命令行作为输入端，也就是说在 CLI 中输入对应的 `-flagname`，给定值，经过 Parse 后得到的就是指定的输入值。那**反其道而行之**：在绑定变量后，直接赋值，会有什么效果？
+
+~~~go
+func ReadFromVariable() {
+	var nFlag = flag.Int("i", 10, "flag param n value")
+	*nFlag = 20
+
+	flag := flag.CommandLine.Lookup("i")
+	log.Printf("read:%s", flag.Value.String())
+}
+~~~
+
+也就是说，如果直接给 Flag 绑定的变量赋值，（不需要 Parse 的情况下）直接就可以从 Flag 中获取到值。**原因：`*nFlag` 指向的变量已经和 flag 绑定在一起了**！
 
 # 7 错误解决
 

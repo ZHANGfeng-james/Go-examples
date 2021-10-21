@@ -1,9 +1,7 @@
-
-
 完成 2 件事情：
 
 
-1. 首先我们实现最简单的基于 gRPC 的调用：仅仅使用的是 protobuf 数据通信格式，基座是 HTTP 通信；
+1. 首先我们实现最简单的、仅仅使用的是 protobuf 数据通信格式，基座是 HTTP 通信；
 2. 标准的 gRPC 通信案例；
 
 # 1 基于 protobuf 数据格式的 HTTP 通信
@@ -160,7 +158,7 @@ service Greeter {
 
 特别注意，此处**我们定义了一个 service，也就是一个服务**。
 
-服务端代码实现：
+**服务端**代码实现：
 
 ~~~go
 package main
@@ -205,7 +203,7 @@ func main() {
 
 在 .proto 文件中定义的 service，在 Server 端的用处：在创建 *grpc.Server 之后，需要让这个实例和 service 关联起来，也就是 Client 的请求会让这个 *grpc.Server 处理。
 
-客户端代码实现：
+**客户端**代码实现：
 
 ~~~go
 package main

@@ -1,17 +1,12 @@
-package main
+package usage
 
 import (
 	"flag"
 	"fmt"
 	"log"
-	"os"
 )
 
-func main() {
-	parseFlagSet()
-}
-
-func parseFlagSet() {
+func ParseFlagSet() {
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	// 实际的作用就是取到 flag.Args，使用默认的 FlagSet
@@ -42,41 +37,4 @@ func parseFlagSet() {
 	}
 
 	fmt.Printf("name=%q\n", name)
-}
-
-func parseFlag() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-
-	var nFlag = flag.Int("i", 10, "flag param n value")
-
-	var nameFlag string
-	flag.StringVar(&nameFlag, "s", "Katyusha", "name of company")
-
-	var boolFlag bool
-	flag.BoolVar(&boolFlag, "b", false, "whether or not")
-
-	if !flag.Parsed() {
-		flag.Parse()
-	}
-	log.Printf("nFlag:%d, nameFlag:%s, boolFlag:%v", *nFlag, nameFlag, boolFlag)
-
-	args := os.Args
-	log.Println(args)
-
-	flagArgs := flag.Args()
-	log.Println(flagArgs)
-}
-
-func parseArgv() {
-	flags := flag.Args()
-	fmt.Println(flags)
-
-	all := os.Args
-	fmt.Println(all, "size:", len(os.Args))
-
-	args := os.Args[len(os.Args)-1]
-	fmt.Println(args)
-
-	var nFlag = flag.Int("name", 1234, "help message for flag name")
-	fmt.Println(*nFlag)
 }
