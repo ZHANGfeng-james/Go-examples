@@ -673,3 +673,215 @@ ant@MacBook-Pro v4 % go run main.go
 2021/10/22 14:38:43 main.go:34: &{{0 user-lingfei admin {} {} 2021-05-27 18:01:40 +0800 CST 2021-05-06 05:13:14 +0800 CST} admin $2a$10$WnQD2DCfWVhlGmkQ8pdLkesIGPf9KJB7N1mhSOqulbgN7ZMo44Mv2 admin@foxmail.com 1812884xxxx 1 0}
 ~~~
 
+# 5 启动 gRPC 服务，提供数据源
+
+提供 gRPC 服务，首先需要编写 .proto 文件，用来指定服务内容：
+
+~~~go
+syntax = "proto3";
+
+package pb;
+
+option go_package="github.com/go-examples-with-tests/database/v4/pb";
+
+//go:generate protoc -I. --go_out=plugins=grpc:. cache.proto
+
+service Cache{
+    rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {}
+}
+
+message ListUsersRequest{
+    optional int64 limit = 1;
+    optional string msg = 2;
+}
+
+message UserInfo{
+    string nickname = 1;
+    string password = 2;
+    string phone = 3;
+    string email = 4;
+}
+
+message ListUsersResponse{
+    int64 count = 1;
+    repeated  UserInfo items = 2;
+}
+~~~
+
+执行 `protoc -I. --go_out=plugins=grpc:. cache.proto` 生成对应的 .go 文件。
+
+编写服务端程序：
+
+~~~go
+package main
+
+import (
+	"context"
+	"log"
+	"net"
+
+	"github.com/go-examples-with-tests/database/v4/pb"
+	"github.com/go-examples-with-tests/database/v4/pkg"
+	"github.com/go-examples-with-tests/database/v4/server"
+	"github.com/go-examples-with-tests/database/v4/store"
+	metav1 "github.com/marmotedu/component-base/pkg/meta/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
+)
+
+func init() {
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+}
+func main() {
+	...
+	serverConf := server.NewServerOption()
+	opts := []grpc.ServerOption{grpc.MaxRecvMsgSize(100)}
+	grpcServer := grpc.NewServer(opts...)
+
+	cache, err := server.GetCacheInsOr(dbFactory)
+	if err != nil {
+		log.Println(err.Error())
+		return
+	}
+	pb.RegisterCacheServer(grpcServer, cache)
+	reflection.Register(grpcServer)
+
+	Run(serverConf, grpcServer)
+}
+
+func Run(opts *server.ServerOption, server *grpc.Server) {
+	listener, err := net.Listen("tcp", opts.Addr+opts.Port)
+	if err != nil {
+		log.Fatalf("failed to listen: %s", listener.Addr())
+	}
+	if err := server.Serve(listener); err != nil {
+		log.Fatalf("failed to start grpc server: %s", err.Error())
+	}
+}
+~~~
+
+其中，将 MariaDB 作为数据源，提供为 gRPC 服务。对应的 Cache 用于直接访问数据库：
+
+~~~go
+package server
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+
+	"github.com/go-examples-with-tests/database/v4/pb"
+	"github.com/go-examples-with-tests/database/v4/store"
+
+	metav1 "github.com/marmotedu/component-base/pkg/meta/v1"
+)
+
+type Cache struct {
+	store store.Factory
+}
+
+var (
+	cacheServer *Cache
+	once        sync.Once
+)
+
+func GetCacheInsOr(sf store.Factory) (*Cache, error) {
+	if sf != nil {
+		once.Do(func() {
+			cacheServer = &Cache{store: sf}
+		})
+	}
+
+	if cacheServer == nil {
+		return nil, fmt.Errorf("got nil cache server")
+	}
+	return cacheServer, nil
+}
+
+func (cache *Cache) ListUsers(ctx context.Context, request *pb.ListUsersRequest) (*pb.ListUsersResponse, error) {
+	limit, msg := request.Limit, request.Msg
+	log.Printf("get Request! limit:%d, msg:%s", *limit, *msg)
+
+	// CRUD，拿着 userStore 就可以和 MariaDB 交互
+	userStore := cache.store.Users()
+	user, err := userStore.Get(context.TODO(), "admin", metav1.GetOptions{})
+	if err != nil {
+		log.Println(err.Error())
+	} else {
+		log.Println(user)
+	}
+
+	items := make([]*pb.UserInfo, 0)
+	items = append(items, &pb.UserInfo{
+		Nickname: user.Name,
+		Password: user.Password,
+		Phone:    user.Phone,
+		Email:    user.Email,
+	})
+
+	return &pb.ListUsersResponse{
+		Count: 10,
+		Items: items,
+	}, nil
+}
+~~~
+
+相应的，客户端程序：
+
+~~~go
+package main
+
+import (
+	"context"
+	"log"
+	"time"
+
+	"github.com/go-examples-with-tests/database/v4/pb"
+	"google.golang.org/grpc"
+)
+
+var port = ":8081"
+
+func main() {
+	// 监听指定 port，获得一个 *grpc.ClientConn 实例
+	conn, err := grpc.Dial(port, grpc.WithInsecure(), grpc.WithBlock())
+	if err != nil {
+		log.Fatalf("dial addr: %s error", port)
+	}
+	defer conn.Close()
+
+	c := pb.NewCacheClient(conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	limit := int64(1)
+	msg := "Katyusha"
+	reply, err := c.ListUsers(ctx, &pb.ListUsersRequest{
+		Limit: &limit,
+		Msg:   &msg,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("reply.Count:%d", reply.GetCount())
+	items := reply.GetItems()
+	if items != nil && len(items) > 0 {
+		for _, item := range items {
+			log.Printf("%s, %s, %s, %s", item.Nickname, item.Password, item.Phone, item.Email)
+		}
+	}
+}
+~~~
+
+
+
+
+
+
+
+
+
+
+

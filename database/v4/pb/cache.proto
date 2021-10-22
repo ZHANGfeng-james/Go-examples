@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package pb;
+
+option go_package="github.com/go-examples-with-tests/database/v4/pb";
+
+//go:generate protoc -I. --experimental_allow_proto3_optional --go_out=plugins=grpc:.
+
+service Cache{
+    rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {}
+}
+
+message ListUsersRequest{
+    optional int64 limit = 1;
+    optional string msg = 2;
+}
+
+message UserInfo{
+    string nickname = 1;
+    string password = 2;
+    string phone = 3;
+    string email = 4;
+}
+
+message ListUsersResponse{
+    int64 count = 1;
+    repeated  UserInfo items = 2;
+}
