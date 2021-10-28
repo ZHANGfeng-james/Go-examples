@@ -18,6 +18,6 @@ func pointerTest() {
 	var bean *Bean
 	if bean == nil {
 		log.Println("bean is nil")
-		bean.callMethod()
+		bean.callMethod() // 虽然 bean 的值是 nil，但是仍能够调用方法
 	}
 }

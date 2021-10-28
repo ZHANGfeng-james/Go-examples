@@ -26,3 +26,19 @@ func TestCopySliceUseBuiltin(t *testing.T) {
 		}
 	}
 }
+
+func TestSliceCallFunc(t *testing.T) {
+	sliceCallFunc()
+}
+
+func TestSliceMake(t *testing.T) {
+	createSliceUseMake(3)
+}
+
+func TestSliceAdd(t *testing.T) {
+	getSliceAddr()
+}
+
+func TestSliceSizeof(t *testing.T) {
+	getSliceSizeof()
+}

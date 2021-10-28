@@ -13,5 +13,5 @@ func (b *Bean) callMethod() {
 		log.Println("b is nil")
 	}
 
-	log.Println("b is nil, ", b.value)
+	log.Println("b.value:", b.value) // 此处如果是 pointerTest 会 Panic
 }
