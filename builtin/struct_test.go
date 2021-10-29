@@ -13,3 +13,7 @@ func TestEmptyStructEqual(t *testing.T) {
 func TestNoEmptyStructEqual(t *testing.T) {
 	compareNoEmptyStruct()
 }
+
+func TestStructMemoryAllocation(t *testing.T) {
+	structMemoryAllocation()
+}

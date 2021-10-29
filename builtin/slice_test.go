@@ -35,10 +35,38 @@ func TestSliceMake(t *testing.T) {
 	createSliceUseMake(3)
 }
 
-func TestSliceAdd(t *testing.T) {
+func TestSliceAddr(t *testing.T) {
 	getSliceAddr()
 }
 
 func TestSliceSizeof(t *testing.T) {
 	getSliceSizeof()
+}
+
+func TestSliceAndArrayAddr(t *testing.T) {
+	sliceAndArrayAddr()
+}
+
+func TestSliceAppend(t *testing.T) {
+	sliceAppend()
+}
+
+func TestSliceRead(t *testing.T) {
+	readEleFromSlice()
+}
+
+func TestSliceGrow(t *testing.T) {
+	sliceGrow()
+}
+
+func TestSliceGrowTest(t *testing.T) {
+	sliceGrowTest()
+}
+
+func TestSliceAgagin(t *testing.T) {
+	sliceAgain()
+}
+
+func TestSliceNil(t *testing.T) {
+	nilSlice()
 }

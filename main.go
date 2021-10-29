@@ -1,23 +1,19 @@
 package main
 
-import "log"
+import (
+	"log"
+	"sync/atomic"
+	"unsafe"
+)
 
-type Person struct {
-	name string
-}
-
-func (p *Person) getName() string {
-	return p.name
-}
-
-func (p *Person) setName(name string) {
-	p.name = name
+type T3 struct {
+	b int64
+	c int32
+	d int64
 }
 
 func main() {
-	p := Person{name: "Katyusha"}
-	log.Printf("name:%s", p.getName())
-
-	p.setName("Authur")
-	log.Printf("name:%s", p.getName())
+	t3 := &T3{}
+	atomic.AddInt64(&t3.d, 1)
+	log.Println(unsafe.Sizeof(*t3))
 }

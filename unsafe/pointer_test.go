@@ -20,5 +20,21 @@ func TestUnsafeGetAddr(t *testing.T) {
 }
 
 func TestUnsafeChangeString(t *testing.T) {
-	changeSliceLength()
+	changeStringContent()
+}
+
+func TestUnsafeChangeStruct(t *testing.T) {
+	changeStructField()
+}
+
+func TestUnsafeChangeArray(t *testing.T) {
+	changeArrayEle()
+}
+
+func TestUnsafeGetSliceInfo(t *testing.T) {
+	getSliceHeaderInfo()
+}
+
+func TestUnsafeBytesToString(t *testing.T) {
+	byteSliceToStringNoCopy()
 }

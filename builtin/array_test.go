@@ -11,5 +11,9 @@ func TestArrayCallFunc(t *testing.T) {
 }
 
 func TestArrayGetAddr(t *testing.T) {
-	getArrayDst()
+	getArrayAddr()
+}
+
+func TestArrayCompare(t *testing.T) {
+	compareArray()
 }

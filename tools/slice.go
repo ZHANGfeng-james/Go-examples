@@ -14,5 +14,5 @@ func SliceInfo(variable string, v interface{}) string {
 		log.Fatalf("sliceInfo error! %s interface value is not reflect.Slice", variable)
 	}
 	// ele := value.Slice(0, value.Len())
-	return fmt.Sprintf("%10s slice len():%d, cap():%d, ele:%v", variable, value.Len(), value.Cap(), value)
+	return fmt.Sprintf("%8s slice len():%d, cap():%d, ele:%v", variable, value.Len(), value.Cap(), value)
 }

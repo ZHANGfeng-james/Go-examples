@@ -33,7 +33,7 @@ func callfuncWithArray(arr [3]int) int {
 	return len(arr)
 }
 
-func getArrayDst() {
+func getArrayAddr() {
 	val := [10]int{1, 2, 3}
 	log.Printf("array original address:%p", &val)
 	for i, v := range val {
@@ -48,4 +48,11 @@ func printAddr(value [10]int) {
 	for index := 0; index < len(value); index++ {
 		log.Printf("index= %d; addr= %p.\n", index, &value[index])
 	}
+}
+
+func compareArray() {
+	arr1 := [3]int{1, 2, 3}
+	arr2 := [3]int{1, 2, 3}
+	arr3 := [3]int{2, 3, 4}
+	log.Println(arr1 == arr2, arr1 == arr3)
 }
