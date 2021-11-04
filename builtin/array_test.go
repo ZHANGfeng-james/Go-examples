@@ -17,3 +17,8 @@ func TestArrayGetAddr(t *testing.T) {
 func TestArrayCompare(t *testing.T) {
 	compareArray()
 }
+
+func TestArrayConcurrent(t *testing.T) {
+	arrayConcurrent()
+	intConcurrent()
+}

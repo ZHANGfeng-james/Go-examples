@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -173,4 +174,24 @@ func withValueUseNormalType() {
 	ctx := context.WithValue(context.Background(), k, "Go")
 	f(ctx, k)
 	f(ctx, "color")
+}
+
+func cancelContextPropagate() {
+	parent, pCancel := context.WithCancel(context.Background())
+
+	go func() {
+		time.Sleep(1 * time.Second)
+		pCancel()
+	}()
+
+	val1 := context.WithValue(parent, "1", "1")
+	son, sCancel := context.WithCancel(parent)
+	defer sCancel()
+
+	select {
+	case <-son.Done():
+		log.Println("son cancel() run...")
+	}
+
+	log.Println("Value Context:", val1.Value("1"))
 }

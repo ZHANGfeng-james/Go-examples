@@ -3,6 +3,7 @@ package builtin
 import (
 	"log"
 	"reflect"
+	"sync"
 	"unsafe"
 
 	"github.com/go-examples-with-tests/tools"
@@ -82,6 +83,8 @@ func getSliceAddr() {
 
 	log.Printf("slice:%p, variable slice's address:%p", slice, &slice)
 
+	log.Printf("sizeof(slice):%d, sizeof(tmp):%d", unsafe.Sizeof(slice), unsafe.Sizeof(tmp))
+
 	var values []int64
 	log.Printf("values:%p, variable values's address:%p", values, &values)
 	values = make([]int64, 0)
@@ -113,9 +116,9 @@ func sliceAndArrayAddr() {
 func sliceAppend() {
 	var s []int
 	for i := 0; i < 3; i++ {
-		s = append(s, i) // 0 --> 2; 1 --> 2; 2 --> 4
+		s = append(s, i) // cap: 1-->2-->4, len: 1-->2-->3
+		log.Printf("cap:%d, len:%d", cap(s), len(s))
 	}
-	log.Printf("cap:%d, len:%d", cap(s), len(s))
 
 	// modifySlice(s)
 	modifSliceMore(s)
@@ -138,6 +141,7 @@ func modifSliceMore(s []int) {
 	log.Printf("cap:%d, len:%d", cap(s), len(s))
 
 	s[0] = 1024
+	log.Printf("%v", s) // [1024 1 2 2048 4096]
 }
 
 type node struct {
@@ -225,4 +229,42 @@ func nilSlice() {
 	tmp := make([]int, 0)
 	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&tmp))
 	log.Printf("element data addr:%#x", hdr.Data)
+}
+
+func sliceConcurrent() {
+	var slice []int
+	var wg sync.WaitGroup
+
+	for i := 0; i < 10000; i++ {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+			slice = append(slice, i)
+		}(i)
+	}
+
+	wg.Wait()
+	log.Printf("slize len:%d", len(slice))
+}
+
+func sliceConcurrentMutex() {
+	var slice []int
+	var wg sync.WaitGroup
+
+	var mutex sync.Mutex
+
+	for i := 0; i < 10000; i++ {
+		wg.Add(1)
+
+		go func(i int) {
+			defer wg.Done()
+			mutex.Lock()
+			slice = append(slice, i)
+			mutex.Unlock()
+		}(i)
+	}
+
+	wg.Wait()
+	log.Printf("With sync.Mutex, slize len:%d", len(slice))
 }

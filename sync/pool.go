@@ -1,0 +1,4 @@
+package sync
+
+func poolUsage() {
+}

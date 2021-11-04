@@ -7,3 +7,7 @@ import (
 func TestContext(t *testing.T) {
 	withValueUseNormalType()
 }
+
+func TestCancelContext(t *testing.T) {
+	cancelContextPropagate()
+}

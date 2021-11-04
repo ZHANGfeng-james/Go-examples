@@ -2,6 +2,7 @@ package builtin
 
 import (
 	"log"
+	"sync"
 	"unsafe"
 )
 
@@ -27,7 +28,7 @@ func arrayCallFunc() {
 }
 
 // callfunc call function with a array, and return array's length
-func callfuncWithArray(arr [3]int) int {
+func callfuncWithArray(arr [3]int) int { // 深拷贝
 	arr[len(arr)-1] = 100
 	printArray(arr)
 	return len(arr)
@@ -55,4 +56,37 @@ func compareArray() {
 	arr2 := [3]int{1, 2, 3}
 	arr3 := [3]int{2, 3, 4}
 	log.Println(arr1 == arr2, arr1 == arr3)
+}
+
+func arrayConcurrent() {
+	// 设计一个程序，用于判断 Array 数据结构是否是支持并发访问的
+	val := [3]int{1, 2, 3}
+	var wg sync.WaitGroup
+	// range []int{1, 2, 3}
+	for i := 0; i < 10000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			val[0]++
+		}()
+	}
+	wg.Wait()
+
+	log.Printf("Array Concurrent:%d", val[0])
+}
+
+func intConcurrent() {
+	var val int
+	var wg sync.WaitGroup
+	// range []int{1, 2, 3}
+	for i := 0; i < 10000; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			val++
+		}()
+	}
+	wg.Wait()
+
+	log.Printf("Type:int Concurrent, %d", val)
 }

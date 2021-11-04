@@ -10,6 +10,7 @@ require (
 	github.com/marmotedu/component-base v1.0.1
 	github.com/marmotedu/errors v1.0.2
 	github.com/mattn/go-sqlite3 v1.14.8
+	github.com/petermattis/goid v0.0.0-20180202154549-b0b1615b78e5 // indirect
 	github.com/pkg/errors v0.9.1
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
 	google.golang.org/grpc v1.41.0

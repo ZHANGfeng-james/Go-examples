@@ -162,7 +162,7 @@ type timerCtx struct {
 
 WithDeadline 函数会返回返回一个 parent 的拷贝，同时会附带有一个已调整过的 deadline。如果 parent Context 的 deadline 早于参数 d 表示的时间，返回的结果就和 parent 相同。也就是说，d 必须早于 parent 对应的 deadline，才是会创建一个新的 timerCtx。
 
-![](./Snipaste_2021-09-15_12-00-02.png)
+![](./img/Snipaste_2021-09-15_12-00-02.png)
 
 有 3 种情况能让 WithDeadline 的 timerCtx 的 Channel 关闭：
 

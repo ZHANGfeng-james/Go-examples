@@ -9,6 +9,12 @@ type Bean struct {
 func (b *Bean) callMethod() {
 	log.Printf("callMethod is called, %T, %v", b, b)
 
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println(err)
+		}
+	}()
+
 	if b == nil {
 		log.Println("b is nil")
 	}

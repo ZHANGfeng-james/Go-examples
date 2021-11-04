@@ -70,3 +70,8 @@ func TestSliceAgagin(t *testing.T) {
 func TestSliceNil(t *testing.T) {
 	nilSlice()
 }
+
+func TestSliceConcurrent(t *testing.T) {
+	sliceConcurrent()
+	sliceConcurrentMutex()
+}
