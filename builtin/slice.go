@@ -1,6 +1,7 @@
 package builtin
 
 import (
+	"fmt"
 	"log"
 	"reflect"
 	"sync"
@@ -23,6 +24,20 @@ func readEleFromSlice() {
 
 	nums := slice[0:2]
 	log.Printf("%d", nums)
+
+	arr := make([]int, 0, 3)
+
+	arr = append(arr, 1)
+	arr = append(arr, 2)
+	arr = append(arr, 3)
+	fmt.Println(arr) // [1 2 3]
+
+	slice = make([]int, 1, 3)
+	fmt.Printf("%d, %d\n", len(slice), cap(slice)) // 1, 3
+
+	slice = append(slice, 1)
+	fmt.Println(slice)                             // [0 1]
+	fmt.Printf("%d, %d\n", len(slice), cap(slice)) // 2, 3
 }
 
 func createSliceUseMake(len int) {
@@ -64,6 +79,28 @@ func callfuncWithSlice(arr []int) int {
 	arr[len(arr)-1] = 100
 	printSlice(arr)
 	return len(arr)
+}
+
+func makeSliceUsingArray() {
+	arr := [...]int{1, 2, 3, 4, 5, 6, 7, 8, 9}
+
+	slice := arr[2:4:7]
+	// 2, 5, slice:[3 4]
+	fmt.Printf("%d, %d, slice:%v\n", len(slice), cap(slice), slice)
+
+	slice = append(slice, 1) // 此时 len 值为 2，也就是 index 处理下标是 2
+	slice = append(slice, 1)
+	slice = append(slice, 1)
+	slice = append(slice, 1)
+	/*
+		1, 2, 3, 4, 5, 6, 7, 8, 9
+		      ^  ^        ^
+	*/
+	// 6, 10, slice:[3 4 1 1 1 1]
+	fmt.Printf("%d, %d, slice:%v\n", len(slice), cap(slice), slice)
+	fmt.Println(arr) // [1 2 3 4 1 1 1 8 9]
+
+	fmt.Printf("%p", &slice[0])
 }
 
 func getSliceAddr() {
